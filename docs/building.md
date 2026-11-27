@@ -764,12 +764,13 @@ Use `-- --https` for LAN access with the generated local certificate. Then open
 the served `index.html` in a browser. See \ref EditorArchitecture for how the
 editor is put together.
 
-## Native delivery diagnostics
+## Native delivery diagnostics {#NativeDeliveryDiagnostics}
 
 `--config=native-release-macos` and `--config=native-release-linux` build optimized inputs
 with line tables and stable compilation directories. The macOS variant requests a dSYM;
-the Linux variant requests an ELF build ID. These opt-in configurations support delivery
-experiments; ordinary release producers retain their existing configuration.
+the Linux variant requests an ELF build ID. Ordinary Bazel builds use the normal configured
+output tree. Local symbol copies require an explicit delivery command and stay in the directory
+the caller supplies.
 
 `python3 -m tools.native_delivery` copies an input executable, strips the copy and retains its
 matching diagnostics in the explicit `--symbols` directory. Its parent must already exist,
@@ -782,11 +783,10 @@ binary identity survive stripping, and records both executable hashes and the sy
 The test-only `//tools/ci:release_crash_probe` installs the production failure handler. Running
 it with `--crash` reports its image load address and deliberately aborts through an uninlined
 `DonnerReleaseCrashProbe` frame. Verify that the stripped copy still prints a stack trace, then
-symbolicate the recorded address using the paired diagnostics before adopting a delivery policy.
+symbolicate the recorded address using the paired diagnostics to verify a delivery change.
 The probe has no product dependencies beyond the failure handler and is not part of a release.
 
-Stripping must precede signing and hashing. The diagnostic tool can ad-hoc sign a fresh macOS
-copy with `--sign`; production signing retains its existing separate process. Symbols are
-controlled evidence, excluded from release archives and attachments. Release adoption remains
-pending an explicitly configured retention destination and native crash/symbolication proof;
-these helpers do not change ordinary release producer behavior.
+Stripping precedes signing and hashing of the delivery copy. The diagnostic tool can ad-hoc sign
+a fresh macOS executable with `--sign`. Trusted BCR Preflight runs retain matching symbols
+separately from the release packages. See [release symbol retrieval](release_candidate.md#NativeReleaseSymbols)
+for eligibility, retention and identity checks.

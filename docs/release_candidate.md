@@ -311,6 +311,30 @@ signature or GUI checks. Main preflight attests the ZIP, generated lock and NOTI
 verifies those exact subjects and uploads the retained ZIP and sidecars without rebuilding,
 repacking, signing or replacing published assets.
 
+## Native release symbols {#NativeReleaseSymbols}
+
+The scheduled and manually dispatched **BCR Preflight** jobs on `jwmcglynn/donner`'s `main`
+branch prepare fresh stripped copies of the Linux x86-64 and macOS arm64 CLIs and the macOS arm64
+editor. They verify that the compiler-generated diagnostics match the final packaged executables.
+Each eligible producer retains a separate `donner-native-symbols-<platform>-<commit>-<run-id>-<attempt>`
+Actions artifact for 90 days. It contains the Linux `.debug` file or macOS dSYMs, per-product delivery
+metadata, and `custody.json`. Symbols are excluded from candidate archives, attestations of the
+shipping packages and GitHub Release attachments.
+
+Use the candidate's BCR Preflight run and attempt to find the artifact while it is retained.
+A signed-in account with repository Actions read access can download it from that run or use
+`gh run download` with the exact artifact name. Select the product in `custody.json` and compare
+its archive and final executable SHA-256 values with the files you use. Check the symbol hash
+against the file named by `symbol_file`, which is the DWARF object inside a macOS dSYM. For Linux, use
+`readelf -n` on both the extracted executable and `cli/binary.debug` and compare their ELF build IDs
+with the recorded identity. For macOS, use `dwarfdump --uuid` on the extracted executable and its
+matching dSYM, and compare the arm64 UUID with the recorded identity. If using a separately
+Developer ID-signed derivative, first verify its signing receipt and originating ZIP, then check
+its executable UUID before using the originating symbols.
+
+Ordinary Bazel builds leave outputs in their normal configured tree. Local symbol preparation is
+an explicit operation described in [Native delivery diagnostics](building.md#NativeDeliveryDiagnostics).
+
 ## Developer ID signing of a published editor ZIP
 
 `sign_macos_release.yml` prepares a signed derivative without changing the release. Dispatch it
