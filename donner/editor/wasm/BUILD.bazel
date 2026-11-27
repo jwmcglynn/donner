@@ -8,6 +8,7 @@ load("//tools/http:serve_http.bzl", "serve_http")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 load(
     ":editor_wasm_transition.bzl",
+    "browser_managed_wasm",
     "editor_wasm_config_probe",
     "editor_wasm_geode_only_guard",
     "editor_wasm_geode_transitioned_target",
@@ -354,45 +355,85 @@ js_run_binary(
     use_execroot_entry_point = False,
 )
 
-# Check actual worker Promise suspension before loading the optional editor package.
+# The installed index selects one runtime before loading the editor. Explicit single-runtime
+# packages use the same markup without the alternate-runtime route.
 genrule(
     name = "browser_managed_suspension_index",
     srcs = ["index.html"],
     outs = ["browser_managed_suspension/index.html"],
-    cmd = """
-        test "$$(grep -Fc 'src="editor-bootstrap.js"' $(location index.html))" -eq 1 &&
-        sed 's/src="editor-bootstrap.js"/src="editor-jspi.js"/' $(location index.html) > $@
-    """,
+    cmd = """sed 's/data-asyncify-fallback src="editor-jspi.js"/src="editor-jspi.js"/' $< > $@""",
     visibility = ["//visibility:private"],
 )
 
+genrule(
+    name = "asyncify_index",
+    srcs = ["index.html"],
+    outs = ["asyncify/index.html"],
+    cmd = """sed 's/data-asyncify-fallback src="editor-jspi.js"/src="editor-bootstrap.js"/' $< > $@""",
+    visibility = ["//visibility:private"],
+)
+
+browser_managed_wasm(
+    name = "_browser_managed_wasm",
+    dep = ":wasm",
+    visibility = ["//visibility:private"],
+)
+
+_WEB_PACKAGE_COMMON = [
+    "editor.css",
+    "editor-bootstrap.js",
+    ":minified_static_javascript",
+    "//:donner_icon.svg",
+]
+
+_WEB_PACKAGE_ASSETS = [
+    "//donner/editor:editor_web_resource_bundle",
+    "//third_party/google_fonts:google_fonts_woff2_assets",
+]
+
+_WEB_PACKAGE_TAGS = ["manual", "wasm"]
+
+_WEB_PACKAGE_COMPATIBILITY = select({
+    ":wasm_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
 web_package(
-    name = "wasm_web_package",
-    srcs = [
-        "editor.css",
-        "editor-bootstrap.js",
-        ":minified_static_javascript",
-        "//:donner_icon.svg",
-    ] + select({
-        ":browser_managed_suspension_package": [
-            ":browser_managed_suspension_index",
-            "editor-jspi.js",
-        ],
-        "//conditions:default": ["index.html"],
-    }),
-    asset_trees = [
-        "//donner/editor:editor_web_resource_bundle",
-        "//third_party/google_fonts:google_fonts_woff2_assets",
-    ],
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    target_compatible_with = select({
-        ":wasm_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
+    name = "_wasm_web_package_dual",
+    srcs = _WEB_PACKAGE_COMMON + ["index.html", "editor-jspi.js"],
+    out = "wasm_web_package",
+    asset_trees = _WEB_PACKAGE_ASSETS,
+    asyncify_runtime = ":wasm",
+    tags = _WEB_PACKAGE_TAGS,
+    target_compatible_with = _WEB_PACKAGE_COMPATIBILITY,
+    wasm_deps = [":_browser_managed_wasm"],
+)
+
+web_package(
+    name = "wasm_web_package_jspi",
+    srcs = _WEB_PACKAGE_COMMON + [":browser_managed_suspension_index", "editor-jspi.js"],
+    asset_trees = _WEB_PACKAGE_ASSETS,
+    tags = _WEB_PACKAGE_TAGS,
+    target_compatible_with = _WEB_PACKAGE_COMPATIBILITY,
+    wasm_deps = [":_browser_managed_wasm"],
+)
+
+web_package(
+    name = "wasm_web_package_asyncify",
+    srcs = _WEB_PACKAGE_COMMON + [":asyncify_index"],
+    asset_trees = _WEB_PACKAGE_ASSETS,
+    tags = _WEB_PACKAGE_TAGS,
+    target_compatible_with = _WEB_PACKAGE_COMPATIBILITY,
     wasm_deps = [":wasm"],
+)
+
+alias(
+    name = "wasm_web_package",
+    actual = select({
+        ":browser_managed_suspension_package": ":wasm_web_package_jspi",
+        "//conditions:default": ":_wasm_web_package_dual",
+    }),
+    tags = _WEB_PACKAGE_TAGS,
 )
 
 editor_wasm_geode_transitioned_target(

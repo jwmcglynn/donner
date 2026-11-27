@@ -64,17 +64,33 @@
     );
   }
 
+  const selector = document.currentScript;
+  const probeUrl = selector.src;
+  const canFallback = selector.hasAttribute("data-asyncify-fallback");
+  function start(supported) {
+    if (!supported && !canFallback) {
+      showUnsupported();
+      return;
+    }
+    const bootstrap = document.createElement("script");
+    bootstrap.src = new URL("editor-bootstrap.js", probeUrl).href;
+    if (!supported) bootstrap.dataset.runtime = "asyncify";
+    bootstrap.addEventListener("error", () => {
+      showFailure("Unable to load the editor bootstrap.");
+    }, { once: true });
+    document.body.appendChild(bootstrap);
+  }
+
   if (!hasJspi() || !globalThis.crossOriginIsolated || typeof Worker !== "function") {
-    showUnsupported();
+    start(false);
     return;
   }
 
-  const probeUrl = document.currentScript.src;
   let worker;
   try {
     worker = new Worker(probeUrl);
   } catch {
-    showUnsupported();
+    start(false);
     return;
   }
   let settled = false;
@@ -84,16 +100,7 @@
     settled = true;
     clearTimeout(deadline);
     worker.terminate();
-    if (!supported) {
-      showUnsupported();
-      return;
-    }
-    const bootstrap = document.createElement("script");
-    bootstrap.src = new URL("editor-bootstrap.js", probeUrl).href;
-    bootstrap.addEventListener("error", () => {
-      showFailure("Unable to load the editor bootstrap.");
-    }, { once: true });
-    document.body.appendChild(bootstrap);
+    start(supported);
   }
   worker.addEventListener("message", (event) => finish(event.data === true), { once: true });
   worker.addEventListener("error", () => finish(false), { once: true });

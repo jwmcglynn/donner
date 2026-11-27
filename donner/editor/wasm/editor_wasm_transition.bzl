@@ -46,6 +46,25 @@ editor_wasm_geode_transitioned_target = rule(
     },
 )
 
+def _select_browser_managed_suspension(_settings, _attr):
+    return {_BROWSER_MANAGED_SUSPENSION: True}
+
+_browser_managed_suspension_transition = transition(
+    implementation = _select_browser_managed_suspension,
+    inputs = [],
+    outputs = [_BROWSER_MANAGED_SUSPENSION],
+)
+
+browser_managed_wasm = rule(
+    implementation = _editor_wasm_geode_transitioned_target_impl,
+    attrs = {
+        "dep": attr.label(cfg = _browser_managed_suspension_transition, mandatory = True),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+)
+
 def _editor_wasm_geode_only_guard_impl(ctx):
     editor_wasm_enabled = ctx.attr._editor_wasm_enabled[BuildSettingInfo].value
     renderer_backend = ctx.attr._renderer_backend[BuildSettingInfo].value
