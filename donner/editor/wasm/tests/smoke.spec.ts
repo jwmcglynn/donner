@@ -2118,7 +2118,7 @@ async function readOwnerPipelineCompileFault(page: Page) {
 
 async function armPipelineCompileFault(page: Page) {
   const prologue = pipelineCompileFaultPrologue(kPipelineCompileFault);
-  await page.route("**/editor.js", async (route) => {
+  await page.route(/\/editor(?:-asyncify)?\.js$/, async (route) => {
     const response = await route.fetch();
     await route.fulfill({ response, body: prologue + await response.text() });
   });
@@ -2617,7 +2617,7 @@ test("code-only updates transfer no unchanged essential resource bodies from a p
     if (urls.has(request.url())) bodies.push(request.url());
   });
   let codeRevision = 1;
-  await page.route("**/editor.js", async (route) => {
+  await page.route(/\/editor(?:-asyncify)?\.js$/, async (route) => {
     const code = await route.fetch();
     await route.fulfill({ response: code, body: `${await code.text()}\nvoid ${codeRevision};\n` });
   });

@@ -35,7 +35,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
   const startupGate = new Promise<void>((resolve) => {
     releaseStartup = resolve;
   });
-  await page.route("**/editor.js", async (route) => {
+  await page.route(/\/editor(?:-asyncify)?\.js$/, async (route) => {
     await startupGate;
     await route.continue();
   });
