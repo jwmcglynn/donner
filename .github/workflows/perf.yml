@@ -11,6 +11,11 @@ on:
   schedule:
     - cron: "30 7 * * *"
   workflow_dispatch:
+    inputs:
+      compare_crown_damage_copy:
+        description: Compare the two fixed masked-crown damage-copy revisions on one macOS runner
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -52,7 +57,7 @@ jobs:
             completion_checks: enforce
     runs-on: ${{ matrix.os }}
     needs: gatekeeper
-    if: needs.gatekeeper.outputs.should_run == 'true'
+    if: needs.gatekeeper.outputs.should_run == 'true' && !inputs.compare_crown_damage_copy
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -165,3 +170,46 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: perf-test-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.target_tag }}
+
+
+  crown-damage-comparison:
+    if: github.event_name == 'workflow_dispatch' && inputs.compare_crown_damage_copy
+    runs-on: xcode-27
+    timeout-minutes: 75
+    steps:
+      - name: Checkout the fixed comparison history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 8
+          persist-credentials: false
+
+      - name: Select pinned Xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.2
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ runner.os }}-perf
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Compare the fixed masked-crown damage-copy revisions
+        timeout-minutes: 64
+        run: python3 tools/ci/compare_crown_damage_copy.py run
+
+      - name: Preserve results even if the comparison was interrupted
+        if: always()
+        timeout-minutes: 2
+        run: python3 tools/ci/compare_crown_damage_copy.py collect
+
+      - name: Upload comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crown-damage-comparison
+          path: ${{ runner.temp }}/crown-damage-comparison/evidence
+          if-no-files-found: error
+          retention-days: 14
