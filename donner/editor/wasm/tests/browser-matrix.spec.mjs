@@ -233,11 +233,17 @@ test("graph browser targets declare each project and all imports used by its spe
     .map(([, name, body]) => [name, body]));
   const targets = [...build.matchAll(/editor_browser_test\(\n([\s\S]*?)\n\)/g)].map(([, body]) => body);
   const projects = new Map();
+  const remoteOnly = [];
   for (const body of targets) {
     const name = /name = "([^"]+)"/.exec(body)[1];
     const project = /project = "([^"]+)"/.exec(body)[1];
     const specs = [.../specs = \[([^\]]+)\]/.exec(body)[1].matchAll(/"([^"]+)"/g)].map(([, file]) => file);
-    projects.set(project, [...(projects.get(project) || []), ...specs]);
+    if (/^ {4}remote_only = True,/m.test(body)) {
+      remoteOnly.push({ name, project, specs });
+      assert.match(body, /package = "\/\/donner\/editor\/wasm:_wasm_web_package_for_jspi_startup"/);
+    } else {
+      projects.set(project, [...(projects.get(project) || []), ...specs]);
+    }
     const reach = new Set(["editor_browser_config_sources"]);
     for (const [, group] of body.matchAll(/":(editor_browser_[^"]+)"/g)) reach.add(group);
     const inputs = [];
@@ -249,6 +255,12 @@ test("graph browser targets declare each project and all imports used by its spe
     }
     assertListsLoadedFiles(name, body, { entryPoints: ["playwright.editor-ci.config.js", ...specs], runfilesFrom: inputs });
   }
+  assert.deepEqual(remoteOnly, [{
+    name: "chromium_editor_jspi_startup_test",
+    project: "chromium-default",
+    specs: ["boot-presentation.spec.ts", "jspi-capability.spec.ts"],
+  }]);
+  assert.ok(require("./playwright.config.js").testIgnore.includes("jspi-capability.spec.ts"));
   assert.deepEqual([...projects.keys()].sort(), [
     "chromium-default", "composited-chromium", "firefox-composited-invariants", "firefox-geode-resize", "firefox-quarantine-report", "webkit-geode-carousel",
   ]);

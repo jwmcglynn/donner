@@ -35,6 +35,8 @@ module.exports = defineConfig({
     "composited-invariants.spec.ts",
     "composited-drag-invariants.spec.ts",
     "font-reference.spec.ts",
+    // The dedicated JSPI target supplies an opt-in package independently of this project.
+    "jspi-capability.spec.ts",
     // This spec serves the standalone renderer package, not the production editor package.
     "standalone-geode-browser-renderer.spec.ts",
   ],
