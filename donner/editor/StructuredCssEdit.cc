@@ -117,21 +117,25 @@ std::size_t StartAfterLastSemicolon(const css::SimpleBlock& block, std::size_t b
   return bodyStart;
 }
 
+std::optional<std::size_t> EmbeddedBodyStart(const css::SimpleBlock& block, std::size_t cssSize) {
+  if (block.closedAtEof || !block.sourceOffset.offset || block.sourceByteLength < 2) {
+    return std::nullopt;
+  }
+  const auto start = *block.sourceOffset.offset;
+  return start + block.sourceByteLength == cssSize ? std::optional(start + 1) : std::nullopt;
+}
+
 template <typename Mapper>
 void PrepareEmbeddedDeclarationInsertion(std::string_view css, std::size_t offset,
                                          const svg::SVGStylesheetRule& rule,
                                          StructuredCssTarget& target, Mapper map) {
   const auto parsed = css::parser::RuleParser::ParseRule(css);
   const auto* qualified = parsed ? std::get_if<css::QualifiedRule>(&parsed->value) : nullptr;
-  if (!qualified || qualified->block.closedAtEof || !qualified->block.sourceOffset.offset ||
-      qualified->block.sourceByteLength < 2) {
+  const auto start = qualified ? EmbeddedBodyStart(qualified->block, css.size()) : std::nullopt;
+  if (!start) {
     return;
   }
-  const auto start = *qualified->block.sourceOffset.offset;
-  if (start + qualified->block.sourceByteLength != css.size()) {
-    return;
-  }
-  const auto tail = StartAfterLastSemicolon(qualified->block, start + 1);
+  const auto tail = StartAfterLastSemicolon(qualified->block, *start);
   const auto closingBrace = css.size() - 1;
   if (tail > closingBrace) {
     return;
