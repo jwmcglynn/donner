@@ -2293,6 +2293,36 @@ test("held drag motion includes its dispatched press and a later represented mov
   assert.equal(metrics.heldDragPositionCount(completed), 2);
 });
 
+test("crown motion requires represented input before physical release", async () => {
+  const { completedDragFrames, heldDragPositionCount, physicallyHeldDragPositionCount } =
+    await import("./drag-input-stream.mjs");
+  const frame = (completedSerial, completedAtMs, pointerX, mouseDown = true) => ({
+    presentation: { completedSerial, completedAtMs, pointerX, pointerY: 0,
+      mouseDown, inputRepresented: true },
+  });
+  const stream = {
+    startedAtMs: 10,
+    pressDispatchedAtMs: 20,
+    releasedAtMs: 50,
+    start: { x: 0, y: 0 },
+    dispatchPoints: [{ x: 1, y: 0 }, { x: 2, y: 0 }],
+    dispatchTimes: [25, 35],
+  };
+  const score = (frames) => {
+    const drag = { ...stream, frames };
+    return physicallyHeldDragPositionCount(drag, completedDragFrames(drag, 1));
+  };
+  const press = frame(2, 22, 0);
+  const move = frame(3, 30, 1);
+  const nextMove = frame(4, 42, 2);
+  const late = [press, frame(3, 24, 1), frame(4, 40, 1, false), frame(5, 50, 2)];
+  assert.equal(heldDragPositionCount(completedDragFrames({ ...stream, frames: late }, 1)), 2);
+  assert.equal(score(late), 1, "only the represented press counts");
+  assert.equal(score([press, frame(3, 26, 1e-9), move]), 2, "coordinate jitter is not motion");
+  assert.equal(score([move, nextMove]), 2, "two moved positions do not need a sampled press");
+  assert.equal(score([frame(2, 19, 0), move]), 1, "the press cannot complete before dispatch");
+});
+
 test("the drag sampler observes the drag until the one release stall guard", async () => {
   const stream = await import("./drag-input-stream.mjs");
   const completed = (sampled) => stream.dragInputLatencies(sampled, 1).length;

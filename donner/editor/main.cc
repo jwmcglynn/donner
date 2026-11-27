@@ -341,6 +341,7 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   }
 
   WasmFrameScope frameScope(*state);
+  donner::gpu::browser::ProcessBrowserGpuOwnerBeforeFrame();
   if (forceFrame) {
     state->window->wakeEventLoop();
   }

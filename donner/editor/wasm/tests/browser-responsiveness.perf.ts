@@ -22,6 +22,7 @@ import {
   completedDragFrames,
   dragInputLatencies,
   heldDragPositionCount,
+  physicallyHeldDragPositionCount,
   kPresentationSamplePollMs,
   kReleaseFrameTimeoutMs,
   streamDragInputs,
@@ -503,6 +504,7 @@ async function continuousDrag(
   start: { x: number; y: number },
   direction: number,
   phase: string,
+  scorePhysicalHold = false,
 ) {
   const before = await snapshot(page);
   const stream = await streamDragToIdle(page, start, direction);
@@ -544,14 +546,20 @@ async function continuousDrag(
   const latencies = dragInputLatencies(stream, baselineSerial);
   const completedFrames = completedDragFrames(stream, baselineSerial);
   if (!baselineOnly) {
-    const heldPositions = heldDragPositionCount(completedFrames);
+    const stampedHeldPositions = heldDragPositionCount(completedFrames);
+    const heldPositions = scorePhysicalHold
+      ? physicallyHeldDragPositionCount(stream, completedFrames)
+      : stampedHeldPositions;
+    const heldDetail = scorePhysicalHold
+      ? `${heldPositions} represented positions completed before release (${stampedHeldPositions} stamped held)`
+      : `${heldPositions} held positions completed`;
     // The hosted macOS Perf job reports, rather than fails, a miss in Chromium in the masked crown
     // drag (#2106); it enforces Firefox and every other phase, as does every run that does not set
     // report mode.
     await completionCheck(
       "heldDragPositions",
       phase,
-      `${heldPositions} held positions completed`,
+      heldDetail,
       () =>
         expect(heldPositions, "held drag must complete multiple represented positions")
           .toBeGreaterThan(1),
@@ -1865,7 +1873,7 @@ async function maskedCrownDragWithCounters(
   let drag: Awaited<ReturnType<typeof continuousDrag>> | undefined;
   let dragFailure: unknown;
   try {
-    drag = await continuousDrag(page, point, 0.25, phase);
+    drag = await continuousDrag(page, point, 0.25, phase, /*scorePhysicalHold=*/ true);
   } catch (error) {
     dragFailure = error;
   }

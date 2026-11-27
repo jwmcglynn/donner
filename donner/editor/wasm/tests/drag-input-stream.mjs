@@ -147,8 +147,8 @@ export async function streamDragInputs({ start, direction, releaseFrameTimeoutMs
       setTimeout(move, 16);
     });
   } finally {
-    dispatch("mouseup", end.x, end.y, 0);
     releasedAtMs = performance.now();
+    dispatch("mouseup", end.x, end.y, 0);
     if (state.__donnerPresentationQueueStats) {
       const deadline = releasedAtMs + releaseFrameTimeoutMs;
       await new Promise((resolve) => {
@@ -268,4 +268,35 @@ export function heldDragPositionCount(completedFrames) {
     completedFrames.filter((frame) => frame.presentation.mouseDown)
       .map((frame) => `${frame.presentation.pointerX},${frame.presentation.pointerY}`),
   ).size;
+}
+
+/**
+ * Count distinct represented input positions that completed during the physical hold.
+ * A represented press counts once. Passing still requires a dispatched, materially moved position.
+ * The page records both dispatch and completion in its performance clock.
+ * @param {DragStream} stream The measured drag.
+ * @param {DragFrame[]} completedFrames Frames from `completedDragFrames`.
+ * @returns {number}
+ */
+export function physicallyHeldDragPositionCount(stream, completedFrames) {
+  const positions = new Set();
+  for (const { presentation } of completedFrames) {
+    if (!presentation.mouseDown || presentation.completedAtMs < stream.pressDispatchedAtMs
+      || presentation.completedAtMs >= stream.releasedAtMs) {
+      continue;
+    }
+    if (matchesDispatchedPoint(stream.start, presentation)) {
+      positions.add(`${stream.start.x},${stream.start.y}`);
+      continue;
+    }
+    const index = stream.dispatchPoints.findLastIndex((point, index) =>
+      matchesDispatchedPoint(point, presentation)
+      && stream.dispatchTimes[index] <= presentation.completedAtMs
+    );
+    if (index >= 0) {
+      const { x, y } = stream.dispatchPoints[index];
+      positions.add(`${x},${y}`);
+    }
+  }
+  return positions.size;
 }

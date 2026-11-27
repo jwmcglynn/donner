@@ -1,5 +1,6 @@
 #include "donner/gpu/browser/BrowserGpuTaskQueue.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -47,6 +48,37 @@ TEST(BrowserGpuTaskQueueTest, NewRequestsCannotExtendExecutingBatch) {
   EXPECT_FALSE(queue.empty());
   EXPECT_EQ(queue.executeBatch(), 1u);
   EXPECT_EQ(calls, 1);
+}
+
+TEST(BrowserGpuTaskQueueTest, BoundedBatchKeepsOlderWorkAheadOfReentrantAppend) {
+  BrowserGpuTaskQueue queue;
+  std::vector<int> calls;
+  struct Context {
+    BrowserGpuTaskQueue& queue;
+    std::vector<int>& calls;
+    int value;
+    BrowserGpuTask* reentrant = nullptr;
+  };
+  const auto record = [](void* data) {
+    auto& context = *static_cast<Context*>(data);
+    context.calls.push_back(context.value);
+    if (context.reentrant) {
+      context.queue.enqueue(*context.reentrant);
+    }
+  };
+  Context last{queue, calls, 3};
+  BrowserGpuTask c{record, &last};
+  Context first{queue, calls, 1, &c};
+  Context second{queue, calls, 2};
+  BrowserGpuTask a{record, &first}, b{record, &second};
+  queue.enqueue(a);
+  queue.enqueue(b);
+  EXPECT_EQ(queue.executeBatchWhile([](std::size_t) { return false; }), 0u);
+  EXPECT_EQ(queue.executeBatchWhile([](std::size_t count) { return count < 1; }), 1u);
+  EXPECT_THAT(calls, testing::ElementsAre(1));
+  EXPECT_EQ(queue.executeBatch(), 2u);
+  EXPECT_THAT(calls, testing::ElementsAre(1, 2, 3));
+  EXPECT_TRUE(queue.empty());
 }
 
 TEST(BrowserGpuTaskQueueTest, CallbackCanReclaimItsOwnBorrowedTask) {

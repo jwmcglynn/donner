@@ -690,7 +690,15 @@ Status Device::destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& 
   const uint32_t slotIndex = consumed.slotIndex();
   const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
   const bool releasesTextureAllocation = ReleasesTextureAllocation(*resolved.result());
-  table.retire(slotIndex);
+  if constexpr (std::is_same_v<Record, TextureRecord>) {
+    // Invalidate the texture identity before dropping its view. The backend view retirement
+    // can pump work, so no table address may be kept across it.
+    TextureView ownedView =
+        std::move(table.findMutable(slotIndex, consumed.generation())->defaultSampledView);
+    table.retire(slotIndex);
+  } else {
+    table.retire(slotIndex);
+  }
   retireResource(kind, slotIndex, lastUseSerial, releasesTextureAllocation);
   return OkStatus();
 }
@@ -698,13 +706,18 @@ Status Device::destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& 
 template <typename Record>
 void Device::releaseFromRaii(details::SlotTable<Record>& table, uint32_t slotIndex,
                              uint32_t generation, ResourceKind kind) {
-  const Record* record = table.find(slotIndex, generation);
+  Record* record = table.findMutable(slotIndex, generation);
   if (record == nullptr) {
     return;  // Already destroyed explicitly (or consumed); RAII release is a no-op.
   }
   const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
   const bool releasesTextureAllocation = ReleasesTextureAllocation(*record);
-  table.retire(slotIndex);
+  if constexpr (std::is_same_v<Record, TextureRecord>) {
+    TextureView ownedView = std::move(record->defaultSampledView);
+    table.retire(slotIndex);
+  } else {
+    table.retire(slotIndex);
+  }
   retireResource(kind, slotIndex, lastUseSerial, releasesTextureAllocation);
 }
 
@@ -851,6 +864,72 @@ Result<TextureView> Device::createTextureView(const Texture& texture,
     return std::move(status).error();
   }
   return handle;
+}
+
+Result<std::optional<TextureViewRef>> Device::borrowDefaultSampledTextureView(
+    const Texture& texture, const TextureViewDescriptor& descriptor) {
+  if (isLost()) {
+    return Err(GpuErrorType::DeviceLost, "cannot borrow a view from a lost device");
+  }
+  auto resolved = resolve(textures_, texture, TextureTag::kName);
+  if (resolved.hasError()) {
+    return std::move(resolved).error();
+  }
+  const TextureRecord& record = *resolved.result();
+  // Empty permits a transient fallback, which is not safe during backing destruction.
+  if (record.retiringBacking) {
+    return Err(GpuErrorType::InvalidHandle, "cannot create a view of a retiring texture backing");
+  }
+  // Registrations and acquired surface frames have no allocation ownership in their record.
+  if (!record.ownsAllocation || !HasAllFlags(record.descriptor.usage, TextureUsage::Sampled)) {
+    return std::optional<TextureViewRef>();
+  }
+  if (record.defaultSampledView.isValid()) {
+    return std::optional<TextureViewRef>(record.defaultSampledView);
+  }
+  auto view = createDefaultSampledTextureView(texture, descriptor);
+  if (view.hasError()) {
+    return std::move(view).error();
+  }
+  return std::optional<TextureViewRef>(view.result());
+}
+
+Result<Device::TextureRecord*> Device::lookupLiveOwnedTexture(uint32_t slot, uint32_t generation) {
+  if (isLost()) {
+    return Err(GpuErrorType::DeviceLost, "device lost while resolving a texture view");
+  }
+  TextureRecord* record = textures_.findMutable(slot, generation);
+  if (record == nullptr || !record->ownsAllocation || record->retiringBacking) {
+    return Err(GpuErrorType::InvalidHandle, "texture backing changed while resolving its view");
+  }
+  return record;
+}
+
+Result<TextureViewRef> Device::createDefaultSampledTextureView(
+    const Texture& texture, const TextureViewDescriptor& descriptor) {
+  const uint32_t slot = texture.slotIndex();
+  const uint32_t generation = texture.generation();
+  auto view = createTextureView(texture, descriptor);
+  if (view.hasError()) {
+    return std::move(view).error();
+  }
+  // Creating or releasing a backend view can pump work, so look up the texture after each.
+  auto record = lookupLiveOwnedTexture(slot, generation);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (record.result()->defaultSampledView.isValid()) {
+    // A nested creation won. Drop our surplus before reading the winner, because its release
+    // can retire the texture or its backing.
+    view.result() = TextureView();
+    record = lookupLiveOwnedTexture(slot, generation);
+    if (record.hasError()) {
+      return std::move(record).error();
+    }
+  } else {
+    record.result()->defaultSampledView = std::move(view).result();
+  }
+  return TextureViewRef(record.result()->defaultSampledView);
 }
 
 Result<Sampler> Device::createSampler(const SamplerDescriptor& descriptor) {
@@ -1419,22 +1498,33 @@ Status Device::destroyBufferBacking(Buffer&& buffer) {
 }
 
 Status Device::destroyTextureBacking(Texture&& texture) {
+  // Consume the owner's handle before backend hooks can pump work.
+  Texture owned = std::move(texture);
   // Ownership decides whether the allocation is ours to free at all: a registration of host
   // memory, and a frame a surface handed out, are both named by a perfectly valid handle whose
   // memory belongs to someone else. Checking here rather than in each backend hook is what makes
   // the guarantee hold on every backend instead of on the ones that remembered.
-  const Status validated = validateTextureHandleForBackend(texture);
-  if (!validated.hasError() && ownsTextureBacking(texture)) {
-    releaseTextureBackingOrDefer(texture.slotIndex());
+  const Status validated = validateTextureHandleForBackend(owned);
+  if (!validated.hasError() && ownsTextureBacking(owned)) {
+    const uint32_t slot = owned.slotIndex();
+    const uint32_t generation = owned.generation();
+    {
+      TextureRecord& record = *textures_.findMutable(slot, generation);
+      record.retiringBacking = true;
+      TextureView ownedView = std::move(record.defaultSampledView);
+    }
+    if (const TextureRecord* record = textures_.find(slot, generation);
+        record && record->ownsAllocation) {
+      releaseTextureBackingOrDefer(slot);
+    }
     // This device's claim on the allocation ends here, whether the backend frees it now or an
     // export keeps it alive until its last holder lets go. The record forgets the claim, so the
     // slot's later recycle does not report it a second time.
-    if (TextureRecord* record = textures_.findMutable(texture.slotIndex(), texture.generation());
-        record != nullptr) {
+    if (TextureRecord* record = textures_.findMutable(slot, generation); record != nullptr) {
       reportTextureRelease(std::exchange(record->ownsAllocation, false));
     }
   }
-  const Status destroyed = destroyTexture(std::move(texture));
+  const Status destroyed = destroyTexture(std::move(owned));
   return validated.hasError() ? validated : destroyed;
 }
 

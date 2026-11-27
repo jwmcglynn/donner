@@ -29,16 +29,32 @@ public:
 
   /// Execute the current batch in FIFO order, returning its size. Reentrant work stays queued.
   std::size_t executeBatch() {
+    return executeBatchWhile([](std::size_t) { return true; });
+  }
+
+  /// Execute a prefix of the detached batch while the caller admits another callback.
+  /// Unstarted entries stay ahead of any work appended reentrantly.
+  /// @param admit Receives the number of callbacks already started in this batch.
+  template <typename Predicate>
+  std::size_t executeBatchWhile(Predicate admit) {
     BrowserGpuTask* task = head_;
+    BrowserGpuTask* detachedTail = tail_;
     head_ = nullptr;
     tail_ = nullptr;
     std::size_t count = 0;
-    while (task) {
+    while (task && admit(count)) {
       BrowserGpuTask* next = task->next;
       task->next = nullptr;
       task->callback(task->context);
       task = next;
       ++count;
+    }
+    if (task) {
+      detachedTail->next = head_;
+      head_ = task;
+      if (!tail_) {
+        tail_ = detachedTail;
+      }
     }
     return count;
   }
