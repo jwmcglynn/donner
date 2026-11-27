@@ -52,9 +52,11 @@ constexpr HeldFrame kHeldFrames[] = {
     // texture of the tile's size, which no earlier frame used. Each held frame also creates two
     // render targets and the views its passes need. Owned blit textures reuse their default
     // source views, avoiding repeated creation and deferred destruction of transient views.
-    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
+    // A simple clip proven outside the damage target no longer allocates its target-sized mask;
+    // that removes five owner resource-creation trips from every held move.
+    {12.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {24.0, {.resourceCreation = 14, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {36.0, {.resourceCreation = 14, .resourceSharing = 2, .commandBatch = 6}, 10},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {

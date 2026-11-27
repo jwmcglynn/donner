@@ -6349,6 +6349,111 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
   EXPECT_THAT(outside, IsTransparent()) << "Outside clip should be transparent";
 }
 
+/// A simple clip whose transformed coverage is separated from the active target cannot affect a
+/// pixel. It must suppress the clipped draw without allocating a full-target mask, and popping it
+/// must restore ordinary sibling drawing. A near-edge clip remains on the exact mask path so
+/// antialiasing at the target boundary is never approximated by the cull.
+TEST_F(RendererGeodeTest, OffTargetSimplePathClipSkipsMaskAndBalancesTheClipStack) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip farClip;
+  farClip.clipPathUnitsTransform = Transform2d::Scale(2.0);
+  farClip.clipPaths.push_back({
+      .path = PathBuilder().addRect(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0)).build(),
+      .parentFromEntity = Transform2d::Translate(Vector2d(80.0, 80.0)),
+  });
+  renderer.pushClip(farClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popClip();
+
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(8.0, 8.0, 16.0, 16.0), StrokeParams{});
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.clipMaskViewCountForTesting(), testing::Eq(0u))
+      << "a proven-empty clip must not allocate or retain a target-sized mask";
+  EXPECT_THAT(renderer.simpleClipCullCountForTesting(), testing::Eq(1u));
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 16, 16), RgbaEq(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 32, 32), IsTransparent())
+      << "the clipped full-target draw must remain suppressed";
+
+  RendererGeode nearEdge = createRenderer();
+  beginFrame(nearEdge);
+  ResolvedClip nearClip;
+  nearClip.clipPaths.push_back(
+      {.path = PathBuilder().addRect(Box2d::FromXYWH(63.5, 8.0, 2.0, 8.0)).build()});
+  nearEdge.pushClip(nearClip);
+  nearEdge.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  nearEdge.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  nearEdge.popClip();
+  nearEdge.endFrame();
+  EXPECT_THAT(nearEdge.clipMaskViewCountForTesting(), testing::Gt(0u))
+      << "coverage at the target edge must retain exact mask rasterization";
+  EXPECT_THAT(nearEdge.simpleClipCullCountForTesting(), testing::Eq(0u));
+
+  RendererGeode unrepresentable = createRenderer();
+  beginFrame(unrepresentable);
+  ResolvedClip unrepresentableClip;
+  unrepresentableClip.clipPaths.push_back({
+      .path = PathBuilder().addRect(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0)).build(),
+      .parentFromEntity =
+          Transform2d::Translate(Vector2d(2.0 * std::numeric_limits<float>::max(), 0.0)),
+  });
+  unrepresentable.pushClip(unrepresentableClip);
+  unrepresentable.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  unrepresentable.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  unrepresentable.popClip();
+  unrepresentable.endFrame();
+  EXPECT_THAT(unrepresentable.clipMaskViewCountForTesting(), testing::Gt(0u))
+      << "finite doubles outside the GPU float domain must retain the established mask path";
+  EXPECT_THAT(unrepresentable.simpleClipCullCountForTesting(), testing::Eq(0u));
+}
+
+/// Empty-clip proofs belong to the target and coordinate space in which they were made. A filter
+/// capture saves the outer proof, creates and balances its own proof against the cropped target,
+/// then restores only the outer proof. Neither may suppress a sibling drawn after both are popped.
+TEST_F(RendererGeodeTest, OffTargetSimplePathCullIsScopedAcrossFilterCapture) {
+  RendererGeode renderer = createRenderer();
+  RenderViewport viewport;
+  viewport.size = Vector2d(256.0, 256.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+
+  const auto clipAt = [](double x) {
+    ResolvedClip clip;
+    clip.clipPaths.push_back(
+        {.path = PathBuilder().addRect(Box2d::FromXYWH(x, 0.0, 8.0, 8.0)).build()});
+    return clip;
+  };
+  const ResolvedClip outerClip = clipAt(320.0);
+  renderer.pushClip(outerClip);
+  renderer.pushFilterLayer(components::FilterGraph{}, Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0));
+  const ResolvedClip captureClip = clipAt(128.0);
+  renderer.pushClip(captureClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 256.0, 256.0), StrokeParams{});
+  renderer.popClip();
+  renderer.popFilterLayer();
+  renderer.popClip();
+
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(128.0, 8.0, 16.0, 16.0), StrokeParams{});
+  renderer.endFrame();
+
+  EXPECT_THAT(renderer.clipMaskViewCountForTesting(), testing::Eq(0u));
+  EXPECT_THAT(renderer.simpleClipCullCountForTesting(), testing::Eq(2u))
+      << "the outer and cropped capture targets must each prove their own empty clip";
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(PixelAt(actual, 136, 16), RgbaEq(0, 0, 255, 255))
+      << "a proof made against the cropped capture must not escape into the restored target";
+  EXPECT_THAT(PixelAt(actual, 16, 16), IsTransparent());
+}
+
 TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
