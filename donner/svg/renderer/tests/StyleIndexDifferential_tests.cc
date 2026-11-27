@@ -1648,13 +1648,15 @@ TEST(StyleIndexDifferential, WholeRuleInsertionAndDeletionMatchFreshCascade) {
 TEST(StyleIndexDifferential, StylesheetRuleScanBudgetFallsBackToFreshCascade) {
   constexpr std::string_view source = R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">
-      <style>.hot { fill: red; }</style>
+      <style>.hot:not(.hot) { fill: tan; }</style>
       <rect id="target" class="hot"/>
     </svg>)svg";
   std::string editedSource(source);
-  const std::size_t colorOffset = editedSource.find("red");
-  ASSERT_THAT(colorOffset, testing::Ne(std::string::npos));
-  editedSource.replace(colorOffset, 3, "tan");
+  constexpr std::string_view oldSelector = ".hot:not(.hot)";
+  constexpr std::string_view newSelector = ".hot";
+  const std::size_t selectorOffset = editedSource.find(oldSelector);
+  ASSERT_THAT(selectorOffset, testing::Ne(std::string::npos));
+  editedSource.replace(selectorOffset, oldSelector.size(), newSelector);
 
   auto unlimited = ParseSource(source);
   auto limited = ParseSource(source);
@@ -1686,11 +1688,12 @@ TEST(StyleIndexDifferential, StylesheetRuleScanBudgetFallsBackToFreshCascade) {
   limits.ruleElementMatches = expectedPass.counters.rulesTested;
   limitedRegistry.ctx().emplace<StyleResourceBudget>(limits);
 
-  const SourceRange range{FileOffset::Offset(colorOffset), FileOffset::Offset(colorOffset + 3)};
+  const SourceRange range{FileOffset::Offset(selectorOffset),
+                          FileOffset::Offset(selectorOffset + oldSelector.size())};
   const auto apply = [&](SVGDocument& document) {
     const auto edit = document.applySourceEdit(xml::XMLEditIntent{
         .range = range,
-        .replacement = "tan",
+        .replacement = newSelector,
         .sourceVersion = document.sourceVersion(),
     });
     ASSERT_THAT(edit.applied, testing::IsTrue());
