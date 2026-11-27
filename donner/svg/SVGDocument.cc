@@ -705,9 +705,18 @@ bool RuleRetainsSource(const css::SelectorRule& rule) {
   });
 }
 
+/**
+ * Trim text-identical rules from both ends of an edited rule window.
+ * @param previous Owner of the first returned span.
+ * @param projected Owner of the second returned span.
+ * @param edit Old and new rule ranges produced by incremental stylesheet parsing.
+ * @return Borrowed changed-rule spans. The first remains valid only while
+ *   `previous.stylesheet` is alive and unchanged. The second remains valid only while
+ *   `projected.stylesheet` is alive and unchanged.
+ */
 std::pair<std::span<const css::SelectorRule>, std::span<const css::SelectorRule>>
-TrimUnchangedWindowRules(const components::StylesheetComponent& previous,
-                         const components::StylesheetComponent& projected,
+TrimUnchangedWindowRules(const components::StylesheetComponent& previous UTILS_LIFETIME_BOUND,
+                         const components::StylesheetComponent& projected UTILS_LIFETIME_BOUND,
                          const css::EditedRuleWindow& edit) {
   auto removed = previous.stylesheet.rules().subspan(edit.oldBegin, edit.oldCount);
   auto added = projected.stylesheet.rules().subspan(edit.newBegin, edit.newCount);

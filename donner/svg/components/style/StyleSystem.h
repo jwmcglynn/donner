@@ -69,7 +69,7 @@ struct UnfilteredCascadeForTesting {};
 
 /// Test-only rule-to-element allowance for the old-and-new stylesheet edit scan.
 struct StylesheetEditScanLimitsForTesting {
-  std::size_t ruleElementMatches;
+  std::size_t ruleElementMatches;  //!< Maximum selector-rule and element pairs to inspect.
 };
 
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
@@ -836,7 +836,15 @@ public:
       Registry& registry, ParseWarningSink& warningSink, StylePassScheduler scheduler,
       bool (*compute)(Registry&, ParseWarningSink&, StylePassScheduler, bool (*)(const Registry&)));
 
-  using ApplyRetainedStyle = bool (*)(Registry&, ParseWarningSink&, StylePassScheduler);
+  /**
+   * Apply styles through the retained renderer after a selective edit scan.
+   * @param registry Document registry containing the marked style targets.
+   * @param warningSink Destination for accepted diagnostics.
+   * @param scheduler Scheduler available to the style pass.
+   * @return False when the edit requires a full render-tree rebuild.
+   */
+  using ApplyRetainedStyle = bool (*)(Registry& registry, ParseWarningSink& warningSink,
+                                      StylePassScheduler scheduler);
 
   /**
    * Mark an admitted list of edited styles, recording the last rendered order when available.
