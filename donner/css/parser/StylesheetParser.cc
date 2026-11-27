@@ -1368,7 +1368,8 @@ std::optional<Stylesheet> SpliceEditWindow(const Stylesheet& old, RuleWindow win
   const auto& oldStats = old.securityStats();
   const auto rawCount =
       UpdatedCount(oldStats.rawRules, before.rawRules, after.rawRules, RuleParser::kMaximumRules);
-  if (!rawCount) {
+  // At the raw-rule limit, a full parse can still reject trailing input, including trivia.
+  if (!rawCount || *rawCount == RuleParser::kMaximumRules) {
     return std::nullopt;
   }
   const auto& beforeStats = before.stylesheet.securityStats();
