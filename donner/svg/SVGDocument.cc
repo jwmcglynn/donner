@@ -677,7 +677,14 @@ std::optional<css::EditedRuleWindow> ParseProjectedStylesheet(
   return std::nullopt;
 }
 
-std::string_view RuleSourceText(const components::StylesheetComponent& sheet,
+/**
+ * Borrow the authored bytes of one parsed rule.
+ * @param sheet Owning stylesheet. The returned view aliases `sheet.text` and remains valid only
+ *   while that storage is alive and unchanged.
+ * @param rule Rule whose local source range is mapped into the stylesheet text.
+ * @return Borrowed rule bytes, or an empty view when the retained range is invalid.
+ */
+std::string_view RuleSourceText(const components::StylesheetComponent& sheet UTILS_LIFETIME_BOUND,
                                 const css::SelectorRule& rule) {
   const std::string_view source(sheet.text);
   const auto start = rule.ruleSourceRange.start.offset;
