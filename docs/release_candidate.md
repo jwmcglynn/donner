@@ -41,6 +41,13 @@ and in the release body; the record cannot contain its own hash.
   editor role also requires that clean exact-source checkout. `docs-provenance` is retained by
   the docs build beside its Pages artifact
   and is never published. `bcr-entry` is described [below](#ReleaseCandidateRegistryEntry).
+  The default editor index selects one of two Wasm modules. A candidate from a source revision
+  with that index includes both runtime pairs. Verification binds the index and runtime selector
+  to the source commit and checks each served gzip stream against its corresponding raw module
+  and embedded build identity. A static host serving the `deploy/` tree must map requests for
+  `editor.wasm` and `editor-asyncify.wasm` to their respective `.gz` files with
+  `Content-Type: application/wasm` and `Content-Encoding: gzip`. Keep the index, glue, both
+  modules and shared assets together under the same immutable release URL.
   The editor dialog script in both `site/` and `deploy/` must match the digest recorded in the
   selected source's `donner/editor/wasm/browser-file-dialogs.release.json`. Its source digest
   identifies the input and the packaged digest identifies the exact bytes produced by the pinned
