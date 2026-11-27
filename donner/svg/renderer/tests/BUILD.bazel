@@ -2629,6 +2629,7 @@ donner_cc_test(
     srcs = ["CustomPropertyRetention_tests.cc"],
     deps = [
         "//donner/base:base_test_utils",
+        "//donner/svg",
         "//donner/svg/components/style:components",
         "//donner/svg/components/style:custom_property_map",
         "//donner/svg/components/style:style_system",

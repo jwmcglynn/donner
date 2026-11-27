@@ -3763,8 +3763,10 @@ void StopCustomPropertyInheritanceAtExternalRoot(const Registry& registry, Entit
     return;
   }
   for (auto& entry : entries) {
-    entry.resolved = true;
-    entry.winner = {};
+    if (!entry.resolved) {
+      entry.resolved = true;
+      entry.winner = {};
+    }
   }
 }
 
@@ -3943,15 +3945,6 @@ CustomPropertyDeclarationBatchResult StyleSystem::findCustomPropertyDeclarations
     result.declarations.assign(names.size(), std::nullopt);
   }
   return result;
-}
-
-std::optional<SourceRange> StyleSystem::findCustomPropertyDeclaration(EntityHandle handle,
-                                                                      std::string_view name) const {
-  const std::array names{name};
-  auto result =
-      findCustomPropertyDeclarations(handle, names, kMaximumCustomPropertyDeclarationQueryWork);
-  return result.complete && !result.declarations.empty() ? result.declarations.front()
-                                                         : std::nullopt;
 }
 
 std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(

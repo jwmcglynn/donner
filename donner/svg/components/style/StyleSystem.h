@@ -792,8 +792,6 @@ public:
   static constexpr std::size_t kMaximumCustomPropertyDeclarationQueryWork = 16 * 1024 * 1024;
   CustomPropertyDeclarationBatchResult findCustomPropertyDeclarations(
       EntityHandle handle, std::span<const std::string_view> names, std::size_t maxWork) const;
-  std::optional<SourceRange> findCustomPropertyDeclaration(EntityHandle handle,
-                                                           std::string_view name) const;
 
   /**
    * Find the author stylesheet rule at \p documentSourceOffset.
