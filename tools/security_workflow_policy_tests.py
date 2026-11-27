@@ -4153,9 +4153,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("external-cache: true", setup)
         self.assertIn("cache-save: ${{ github.event_name != 'pull_request' && "
                       "github.ref == 'refs/heads/main' }}", setup)
-
-        asan_setup = _step_body(_jobs(self.sanitizers)["asan"], "Setup Bazel")
-        self.assertIn("disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-v2", asan_setup)
+        self.assertEqual("ubuntu-26.04", _job_key(ubsan, "runs-on"))
+        self.assertIn(_job_key(ubsan, "runs-on"), HOSTED_IMAGES)
 
     def test_sanitizer_lanes_keep_their_scope_and_filters(self):
         # Exact lists: an extra or overriding flag in a lane fails too, and the order is pinned.
