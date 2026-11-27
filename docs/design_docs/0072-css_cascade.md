@@ -199,10 +199,9 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Land selective stylesheet restyling in [#2789](https://github.com/jwmcglynn/donner/pull/2789),
-  then mark C2 complete. Incremental stylesheet reparsing landed in
-  [#2788](https://github.com/jwmcglynn/donner/pull/2788), alongside the earlier CSS highlighting
-  and completion work.
+- Close out B6 with the bounded variable-substitution and SVG inheritance tests below.
+  Selective stylesheet restyling landed in [#2789](https://github.com/jwmcglynn/donner/pull/2789)
+  after incremental stylesheet reparsing in [#2788](https://github.com/jwmcglynn/donner/pull/2788).
 
 ## Implementation Plan
 
@@ -410,10 +409,10 @@ Part B was originally estimated at 18 engineering days.
     `<style>` text edits.
   - Landed as [`cf0862913`](https://github.com/jwmcglynn/donner/commit/cf0862913607db4dee8abb722f400cde5f94e0de).
     [Main CI passed](https://github.com/jwmcglynn/donner/actions/runs/45944575112) on that revision.
-- [ ] Milestone C2: Restyle only elements affected by changed rules (3 days). Implemented in
+- [x] Milestone C2: Restyle only elements affected by changed rules (3 days). Landed in
       [#2789](https://github.com/jwmcglynn/donner/pull/2789). Head `054d8188` passed
       [unified CI](https://github.com/jwmcglynn/donner/actions/runs/45944815156/attempts/2)
-      and awaits landing. After C1, A3 and A5.
+      and landed as `8b4a64253`. After C1, A3 and A5.
   - Done when: the keystroke goals are met and the differential edit test covers stylesheet
     edits.
   - The table gives medians for one declaration-value edit in `donner_splash.svg`. The paired
