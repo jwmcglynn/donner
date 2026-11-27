@@ -55,6 +55,16 @@ sys.exit(int(failures.get(key, failures.get(tool, 0))))
 """
 
 
+class NativeProfileAdmissionTest(unittest.TestCase):
+    def test_native_profiles_do_not_replace_default_pr_command_plans(self):
+        layout = bcr_preflight.Layout("/temp")
+        plain = bcr_preflight.cli_plan(layout, "linux-x86-64", COMMIT, "1", "1")
+        native = bcr_preflight.cli_plan(layout, "linux-x86-64", COMMIT, "1", "1", native=True)
+        self.assertEqual(plain[0].argv[3:5], ("-c", "opt"))
+        self.assertTrue(any("tools.native_producer" in phase.argv for phase in native))
+        self.assertEqual(native[-1].argv[4], "finalize")
+
+
 class BcrPreflightTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

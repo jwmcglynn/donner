@@ -186,6 +186,16 @@ jobs:
       # (tools/bcr_preflight.py).
       - name: Build and bind the Linux CLI to the preflight candidate
         run: python3 -B -m tools.bcr_preflight cli --platform linux-x86-64
+      - name: Retain paired native diagnostics
+        if: ${{ github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-native-symbols-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-native-symbols/linux-x86-64/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
       - uses: actions/upload-artifact@v7
         with:
           name: donner-cli-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
@@ -220,6 +230,16 @@ jobs:
         run: tools/ci_check_runner_disk.sh
       - name: Build and bind the macOS CLI to the preflight candidate
         run: python3 -B -m tools.bcr_preflight cli --platform darwin-arm64
+      - name: Retain paired native diagnostics
+        if: ${{ github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-native-symbols-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-native-symbols/darwin-arm64/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: false
       - uses: actions/upload-artifact@v7
         with:
           name: donner-cli-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
