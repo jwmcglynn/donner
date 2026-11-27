@@ -8,6 +8,7 @@ module.exports = defineConfig({
     "browser-presentation-regression.spec.ts",
     "browser-surface-recovery.spec.ts",
     "browser-backend-selection.spec.ts",
+    "default-runtime-selection.spec.ts",
   ],
   timeout: 30000,
   // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
@@ -20,6 +21,7 @@ module.exports = defineConfig({
       // Keep the visual pixel assertions intact while budgeting boot and first presentation.
       timeout: 90000,
       grep: [
+        /default editor runtime selection/,
         /ordinary document presentation stays on the GPU/,
         /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
         /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
@@ -43,6 +45,7 @@ module.exports = defineConfig({
     {
       name: "webkit-geode-carousel",
       grep: [
+        /default editor runtime selection/,
         /carousel loads Basic Shapes on the first interactive frame/,
         /WebKit Geode survives a burst of drag wakeups without fatal errors/,
       ],

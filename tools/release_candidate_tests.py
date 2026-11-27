@@ -728,6 +728,52 @@ class SourceAndEditorTest(unittest.TestCase):
         (directory / "SHA256SUMS").write_text(checksums)
         expected["SHA256SUMS"] = digest(checksums.encode())
 
+    def test_editor_fallback_is_required_by_its_source_and_verified_in_deploy(self):
+        index = b'<script data-asyncify-fallback src="editor-jspi.js"></script>'
+        selector = b"// fixture selector"
+        directory, provenance, expected = self._editor_package({
+            "index.html": index, "editor-jspi.js": selector,
+        })
+        self._write_editor_provenance(directory, provenance, expected)
+
+        def verify():
+            return candidate._verify_editor(directory, self.editor_commit, self.root, expected, "12", "2")
+
+        with self.assertRaisesRegex(ValueError, "runtime inventory"):
+            verify()
+        raw = (directory / "site/editor.wasm").read_bytes()
+        fallback = raw + b"fallback"
+        files = {"site/editor-asyncify.wasm": fallback,
+                 "deploy/editor-asyncify.wasm.gz": gzip.compress(fallback, mtime=0)}
+        for tree in ("site", "deploy"):
+            for name, data in (("index.html", index), ("editor-jspi.js", selector),
+                               ("editor.js", b"modern glue"), ("editor-asyncify.js", b"legacy glue")):
+                files[f"{tree}/{name}"] = data
+
+        def replace_files(updates):
+            for name, data in updates.items():
+                (directory / name).write_bytes(data)
+                expected[name] = digest(data)
+            self._rewrite_editor_bytes(directory, expected, raw, gzip.compress(raw, mtime=0))
+
+        replace_files(files)
+        self.assertEqual(verify(), expected["MODULE.bazel.lock"])
+        for name, data, error in [
+            ("deploy/editor-jspi.js", b"changed selector", "selected source"),
+            ("deploy/editor-asyncify.js", b"different glue", "deployed runtime glue"),
+            ("deploy/editor-asyncify.wasm.gz", gzip.compress(raw, mtime=0), "retained raw payload"),
+        ]:
+            with self.subTest(name=name):
+                replace_files({name: data})
+                with self.assertRaisesRegex(ValueError, error):
+                    verify()
+                replace_files({name: files[name]})
+        wrong = b"another build"
+        replace_files({"site/editor-asyncify.wasm": wrong,
+                       "deploy/editor-asyncify.wasm.gz": gzip.compress(wrong, mtime=0)})
+        with self.assertRaisesRegex(ValueError, "build identity"):
+            verify()
+
     def test_editor_identity_spans_a_decompressed_chunk_boundary(self):
         directory, provenance, expected = self._editor_package()
         identity = b"0.8.0\n" + self.editor_commit.encode() + b"\n"

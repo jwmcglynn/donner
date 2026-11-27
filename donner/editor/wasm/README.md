@@ -1,7 +1,7 @@
 # Wasm editor package
 
 The editor uses full text support on native and Wasm. The complete Wasm package includes
-`editor.wasm`, JavaScript/bootstrap files, `assets/` with content-addressed UI fonts,
+the editor runtime pairs, bootstrap files, `assets/` with content-addressed UI fonts,
 fallback fonts, chrome SVGs and samples, and `fonts/` with the twelve deferred catalog faces.
 Application fonts and static SVG payloads are external to the shipping module. ImGui retains
 its small built-in default font. Native packages carry their own verified offline resources.
@@ -19,28 +19,21 @@ Build the complete bundle with:
 bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package
 ```
 
-## Optional browser-managed suspension package
+## Browser suspension
 
-Build a smaller, separately served editor package using the browser's
-WebAssembly JavaScript Promise Integration (JSPI).
+The default package probes actual Promise suspension and resumption in a
+shared-memory worker before requesting either runtime. Browsers that pass use
+the smaller browser-managed suspension (JSPI) build at `editor.js` and
+`editor.wasm`. Other supported browsers use `editor-asyncify.js` and
+`editor-asyncify.wasm`. Both use the same application assets. Startup downloads
+one runtime and keeps that choice for the session.
 
-```sh
-bazel build --config=editor-wasm \
-  --//donner/editor/wasm:browser_managed_suspension=true \
-  //donner/editor/wasm:wasm_web_package
-```
+For a single-runtime installation, build `//donner/editor/wasm:wasm_web_package_jspi`
+or `//donner/editor/wasm:wasm_web_package_asyncify` with `--config=editor-wasm`.
+The JSPI-only package reports a capability error when the worker probe fails.
+The Asyncify-only package starts directly without the JSPI probe.
 
-The optional package checks shared-memory worker support and performs real
-Promise suspension and resumption from worker callbacks before fetching the
-editor glue or module. Serve it with the same cross-origin isolation headers
-as the standard package. A browser that fails the check gets an unsupported
-message and should use the standard package built without the flag.
-
-Each build emits one complete package. Serve the optional and standard builds
-as distinct artifacts if both are offered. The standard build uses Asyncify
-and is the compatibility choice for browsers without JSPI.
-
-## Serving either package
+## Serving the package
 
 Serve the complete output directory, preserving its layout. The bootstrap captures
 its own package URL, so a versioned subdirectory also works. Font requests never

@@ -12,8 +12,15 @@ async function sha256(stream) {
 /** Verify the module at this test server's loopback port against the declared Bazel package. */
 async function verifyServedEditor(baseUrl, directory) {
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(baseUrl)) throw new Error("Expected editor test server on loopback");
+  await verifyModule(baseUrl, directory, "editor.wasm");
+  if (fs.existsSync(path.join(directory, "editor-asyncify.wasm"))) {
+    await verifyModule(baseUrl, directory, "editor-asyncify.wasm");
+  }
+}
+
+async function verifyModule(baseUrl, directory, filename) {
   const response = await new Promise((resolve, reject) => {
-    get(new URL("/editor.wasm", baseUrl), { signal: AbortSignal.timeout(30_000) }, resolve)
+    get(new URL(filename, baseUrl), { signal: AbortSignal.timeout(30_000) }, resolve)
       .once("error", reject);
   });
   if (response.statusCode !== 200) {
@@ -21,10 +28,10 @@ async function verifyServedEditor(baseUrl, directory) {
     throw new Error("Editor test server returned HTTP " + response.statusCode);
   }
   const [expected, served] = await Promise.all([
-    sha256(fs.createReadStream(path.join(directory, "editor.wasm"))),
+    sha256(fs.createReadStream(path.join(directory, filename))),
     sha256(response),
   ]);
-  if (served !== expected) throw new Error("Served editor.wasm differs from the declared package");
+  if (served !== expected) throw new Error(`Served ${filename} differs from the declared package`);
 }
 
 module.exports = { verifyServedEditor };

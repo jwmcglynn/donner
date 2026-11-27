@@ -268,10 +268,10 @@ test("graph browser targets declare each project and all imports used by its spe
     assert.deepEqual(projects.get(browser).sort(), ["composited-drag-invariants.spec.ts", "composited-invariants.spec.ts"]);
   }
   assert.deepEqual(projects.get("webkit-geode-carousel").sort(),
-    ["browser-presentation-regression.spec.ts", "smoke.spec.ts"]);
+    ["browser-presentation-regression.spec.ts", "default-runtime-selection.spec.ts", "smoke.spec.ts"]);
   assert.deepEqual(projects.get("firefox-geode-resize").sort(), [
     "browser-backend-selection.spec.ts", "browser-presentation-regression.spec.ts",
-    "browser-surface-recovery.spec.ts", "smoke.spec.ts",
+    "browser-surface-recovery.spec.ts", "default-runtime-selection.spec.ts", "smoke.spec.ts",
   ]);
   const regular = readdirSync(testDirectory).filter((file) => file.endsWith(".spec.ts")
     && !require("./playwright.config.js").testIgnore.includes(file)
@@ -920,11 +920,13 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     "browser-presentation-regression.spec.ts",
     "browser-surface-recovery.spec.ts",
     "browser-backend-selection.spec.ts",
+    "default-runtime-selection.spec.ts",
   ]);
 
   const firefox = projects.get("firefox-geode-resize");
   assert.ok(firefox, "missing Firefox Geode resize project");
   assert.equal(firefox.use.browserName, "firefox");
+  assert.match(String(firefox.grep), /default editor runtime selection/);
   assert.match(String(firefox.grep), /ordinary document presentation stays on the GPU/);
   assert.match(
     String(firefox.grep),
@@ -942,6 +944,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   const webkit = projects.get("webkit-geode-carousel");
   assert.ok(webkit, "missing WebKit Geode carousel project");
   assert.equal(webkit.use.browserName, "webkit");
+  assert.match(String(webkit.grep), /default editor runtime selection/);
   assert.match(
     String(webkit.grep),
     /carousel loads Basic Shapes on the first interactive frame/,

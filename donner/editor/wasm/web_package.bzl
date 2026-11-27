@@ -8,6 +8,12 @@ def _web_package_impl(ctx):
     args.add("--output", output_dir.path)
     for input_file in ctx.files.srcs + ctx.files.wasm_deps:
         args.add("--file", input_file.path)
+    if ctx.files.asyncify_runtime:
+        runtime = {file.basename: file for file in ctx.files.asyncify_runtime}
+        if len(ctx.files.asyncify_runtime) != 2 or sorted(runtime.keys()) != ["editor.js", "editor.wasm"]:
+            fail("asyncify_runtime must contain exactly editor.js and editor.wasm")
+        for extension in ["js", "wasm"]:
+            args.add_all(["--asset", "editor-asyncify." + extension, runtime["editor." + extension].path])
     for tree in ctx.files.asset_trees:
         if not tree.is_directory:
             fail("asset_trees must contain directory artifacts: %s" % tree.path)
@@ -20,7 +26,7 @@ def _web_package_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._packager,
         arguments = [args],
-        inputs = ctx.files.srcs + ctx.files.wasm_deps + ctx.files.asset_trees,
+        inputs = ctx.files.srcs + ctx.files.wasm_deps + ctx.files.asset_trees + ctx.files.asyncify_runtime,
         outputs = [output_dir],
         mnemonic = "EditorWebPackage",
     )
@@ -37,6 +43,7 @@ web_package = rule(
         ),
         "out": attr.string(),
         "wasm_deps": attr.label_list(),
+        "asyncify_runtime": attr.label(),
         "asset_trees": attr.label_list(),
         "_packager": attr.label(
             default = Label("//donner/editor/wasm:package_web_files"),

@@ -120,6 +120,19 @@ test("the served Wasm module must match the declared package", async (t) => {
   await assert.rejects(verifyServedEditor(url, b), /differs from the declared package/);
 });
 
+test("the served fallback Wasm must match the declared dual package", async (t) => {
+  const served = packageDirectory(t, "served");
+  const declared = packageDirectory(t, "declared");
+  for (const directory of [served, declared]) {
+    writeFileSync(path.join(directory, "editor.wasm"), "same primary module");
+  }
+  writeFileSync(path.join(served, "editor-asyncify.wasm"), "served fallback module");
+  writeFileSync(path.join(declared, "editor-asyncify.wasm"), "different fallback module");
+  const url = await startServer(t, served).url;
+  await verifyServedEditor(url, served);
+  await assert.rejects(verifyServedEditor(url, declared), /editor-asyncify\.wasm differs/);
+});
+
 test("SIGKILL of the server owner closes its listening port", async (t) => {
   const directory = packageDirectory(t, "orphan");
   const parentCode = `

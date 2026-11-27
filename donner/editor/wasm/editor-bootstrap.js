@@ -25,6 +25,10 @@
 const canvas = document.getElementById("canvas");
 // Capture the actual application script URL before creating workers. Font paths never resolve
 // against a document-selected SVG URL or a pthread's blob URL.
+const editorRuntimeBasename = document.currentScript?.dataset.runtime === "asyncify"
+  ? "editor-asyncify"
+  : "editor";
+
 window.__donnerCatalogPackageUrl = document.currentScript
   ? new URL(".", document.currentScript.src).href
   : null;
@@ -369,9 +373,11 @@ var Module = {
       RevealEditorAfterFirstFrame();
     }
   },
+  // Pthreads must re-import the same glue that created their shared memory.
+  mainScriptUrlOrBlob: new URL(editorRuntimeBasename + ".js", window.__donnerCatalogPackageUrl).href,
   locateFile: function(path, prefix) {
     if (path.endsWith(".wasm")) {
-      return prefix + "editor.wasm";
+      return new URL(editorRuntimeBasename + ".wasm", window.__donnerCatalogPackageUrl).href;
     }
     return prefix + path;
   },
@@ -418,13 +424,13 @@ if (window.__donnerCanStartWasm) {
   wasmPreload.as = "fetch";
   wasmPreload.type = "application/wasm";
   wasmPreload.crossOrigin = "anonymous";
-  wasmPreload.href = "editor.wasm";
+  wasmPreload.href = Module.locateFile("editor.wasm", "");
   document.head.appendChild(wasmPreload);
 
   const loader = document.createElement("script");
   loader.async = true;
   loader.type = "text/javascript";
-  loader.src = "editor.js";
+  loader.src = Module.mainScriptUrlOrBlob;
   loader.addEventListener("error", () => {
     ShowCapabilityError("Unable to load the Geode WebGPU renderer package.");
   });
