@@ -546,6 +546,12 @@ void FontManager::addFontFace(const css::FontFace& face) {
   clearLentSetCaches();
 }
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+__attribute__((minsize))
+#endif
+#endif
 bool FontManager::synchronizeLayeredResourceFaces(std::span<const css::FontFace> registered,
                                                   std::span<const std::size_t> order) {
   std::vector<std::string> keys;

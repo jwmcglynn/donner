@@ -1,12 +1,21 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <optional>
 #include <string_view>
 
 #include "donner/base/RcString.h"
 
 namespace donner::xml {
+
+/// Whether a Unicode scalar is permitted as XML 1.0 character data or a character reference.
+constexpr bool IsValidXmlCharacter(std::uint64_t codepoint) {
+  return codepoint == 0x9 || codepoint == 0xA || codepoint == 0xD ||
+         (codepoint >= 0x20 && codepoint <= 0xD7FF) ||
+         (codepoint >= 0xE000 && codepoint <= 0xFFFD) ||
+         (codepoint >= 0x10000 && codepoint <= 0x10FFFF);
+}
 
 /**
  * Escape a string for use as an XML attribute value, producing text that round-trips

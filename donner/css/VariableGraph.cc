@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "donner/base/SmallVector.h"
+#include "donner/css/VariableReference.h"
 
 namespace donner::css {
 namespace {
@@ -15,45 +16,6 @@ constexpr std::size_t kNoDepth = std::numeric_limits<std::size_t>::max();
 constexpr std::size_t kMaxNames = 65'536;
 constexpr std::size_t kMaxGraphWork = 16 * 1024 * 1024;
 constexpr std::size_t kMaxAggregateWork = 16 * 1024 * 1024;
-
-struct Reference {
-  std::string_view name;
-  std::optional<Values> fallback;
-};
-
-void SkipWhitespace(Values& values) {
-  while (!values.empty() && values.front().isToken<Token::Whitespace>()) {
-    values = values.subspan(1);
-  }
-}
-
-std::optional<Reference> ParseReference(const Function& function) {
-  Values args(function.values);
-  SkipWhitespace(args);
-  if (args.empty()) {
-    return std::nullopt;
-  }
-  const auto* ident = args.front().tryGetToken<Token::Ident>();
-  if (!ident || !std::string_view(ident->value).starts_with("--") || ident->value.size() == 2) {
-    return std::nullopt;
-  }
-  args = args.subspan(1);
-  SkipWhitespace(args);
-  Reference result{std::string_view(ident->value), std::nullopt};
-  if (!args.empty()) {
-    if (!args.front().isToken<Token::Comma>()) {
-      return std::nullopt;
-    }
-    result.fallback = args.subspan(1);
-    for (const auto& value : *result.fallback) {
-      const auto* delim = value.tryGetToken<Token::Delim>();
-      if (value.isToken<Token::Semicolon>() || (delim && delim->value == '!')) {
-        return std::nullopt;
-      }
-    }
-  }
-  return result;
-}
 
 bool ValidateSyntax(Values input, std::size_t& workLeft, bool& syntaxValid) {
   SmallVector<Values, 4> levels;
@@ -71,7 +33,7 @@ bool ValidateSyntax(Values input, std::size_t& workLeft, bool& syntaxValid) {
     const auto& value = rest.front();
     rest = rest.subspan(1);
     if (const auto* function = std::get_if<Function>(&value.value)) {
-      if (function->name.equalsLowercase("var") && !ParseReference(*function)) {
+      if (function->name.equalsLowercase("var") && !details::ParseVariableReference(*function)) {
         syntaxValid = false;
         return true;
       }
@@ -87,7 +49,7 @@ class SelectedReferenceScanner {
 public:
   explicit SelectedReferenceScanner(Values input) { levels_.emplace_back(input); }
 
-  std::optional<Reference> next(std::size_t& workLeft, bool& refused) {
+  std::optional<details::VariableReference> next(std::size_t& workLeft, bool& refused) {
     while (!levels_.empty()) {
       auto& rest = levels_.back();
       if (rest.empty()) {
@@ -103,7 +65,7 @@ public:
       rest = rest.subspan(1);
       if (const auto* function = std::get_if<Function>(&value.value)) {
         if (function->name.equalsLowercase("var")) {
-          return ParseReference(*function);
+          return details::ParseVariableReference(*function);
         }
         levels_.emplace_back(function->values);
       } else if (const auto* block = std::get_if<SimpleBlock>(&value.value)) {
@@ -136,10 +98,14 @@ struct PendingReference {
 };
 
 struct Frame {
-  Frame(std::size_t node, Values values, bool valueInvalid)
-      : node(node), scanner(values), valueInvalid(valueInvalid) {}
+  Frame(std::size_t node, std::size_t previousUnmarkedEnd, Values values, bool valueInvalid)
+      : node(node),
+        previousUnmarkedEnd(previousUnmarkedEnd),
+        scanner(values),
+        valueInvalid(valueInvalid) {}
 
   std::size_t node;
+  std::size_t previousUnmarkedEnd;
   SelectedReferenceScanner scanner;
   std::optional<PendingReference> pending;
   bool valueInvalid;
@@ -241,7 +207,7 @@ private:
     }
   }
 
-  bool followReference(const Reference& reference) {
+  bool followReference(const details::VariableReference& reference) {
     const auto found = names_.find(reference.name);
     if (found == names_.end()) {
       if (!inherited_(reference.name)) {
@@ -269,21 +235,26 @@ private:
   }
 
   bool markCycle(std::size_t first) {
-    for (std::size_t i = first; i < frames_.size(); ++i) {
+    const std::size_t before = graphWorkLeft_;
+    while (unmarkedEnd_ > first) {
       if (!graphWorkLeft_) {
         return false;
       }
       --graphWorkLeft_;
-      nodes_[frames_[i].node].cyclic = true;
+      const Frame& frame = frames_[unmarkedEnd_ - 1];
+      nodes_[frame.node].cyclic = true;
+      unmarkedEnd_ = frame.previousUnmarkedEnd;
     }
-    return true;
+    return before == graphWorkLeft_ || acceptAggregate(before - graphWorkLeft_, 0);
   }
 
   void enter(std::size_t i) {
     auto& node = nodes_[i];
     node.state = NodeState::Visiting;
     node.activeDepth = frames_.size();
-    frames_.emplace_back(i, node.syntaxInvalid ? Values{} : *local_[i].value, node.syntaxInvalid);
+    frames_.emplace_back(i, unmarkedEnd_, node.syntaxInvalid ? Values{} : *local_[i].value,
+                         node.syntaxInvalid);
+    unmarkedEnd_ = frames_.size();
   }
 
   std::optional<VariableSubstitutionResult> computeValue(const Frame& frame) {
@@ -319,6 +290,9 @@ private:
     auto& node = nodes_[index];
     node.state = resolved ? NodeState::Resolved : NodeState::Invalid;
     node.activeDepth = kNoDepth;
+    if (unmarkedEnd_ == frames_.size()) {
+      unmarkedEnd_ = frames_.back().previousUnmarkedEnd;
+    }
     frames_.pop_back();
     return true;
   }
@@ -354,6 +328,9 @@ private:
   Names names_;
   std::vector<Node> nodes_;
   SmallVector<Frame, 16> frames_;
+  // The chain tracks unmarked active frames in stack order using one-based indices. Marking
+  // a suffix unlinks its frames so later back-edges cannot visit them again.
+  std::size_t unmarkedEnd_ = 0;
   std::size_t validationWorkLeft_ = kMaxGraphWork;
   std::size_t graphWorkLeft_ = kMaxGraphWork;
   std::size_t componentWorkLeft_ = kMaxAggregateWork;

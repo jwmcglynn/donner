@@ -117,4 +117,11 @@ std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
   return CreateRendererInstance(ActiveRendererBackend(), verbose);
 }
 
+RendererBitmap SnapshotActiveFrame(RendererInterface& renderer) {
+  if (const auto wait = OpsFor(ActiveRendererBackend()).waitForSubmittedFrame) {
+    wait();
+  }
+  return renderer.takeSnapshot();
+}
+
 }  // namespace donner::svg

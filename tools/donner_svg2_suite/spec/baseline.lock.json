@@ -78,6 +78,20 @@
           "svg2-cr-20181004/geometry/XProperty/req-01",
           "svg2-cr-20181004/geometry/XProperty/req-02"
         ]
+      },
+      {
+        "key": "css-cascade-5",
+        "title": "CSS Cascading and Inheritance Level 5",
+        "organization": "w3c",
+        "url": "https://www.w3.org/TR/2022/CR-css-cascade-5-20220113/",
+        "status": "Candidate Recommendation",
+        "edition": "2022-01-13",
+        "revision": "sha256:1fe27cdb69e4990a801bdad630d4bea755b4d472ff9aa23bf07f743056a3a2a1",
+        "stable": false,
+        "used_by": [
+          "svg2-cr-20181004/styling/StylingUsingCSS/req-01",
+          "svg2-cr-20181004/styling/PresentationAttributes/req-01"
+        ]
       }
     ]
   }

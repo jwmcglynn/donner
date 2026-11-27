@@ -853,6 +853,17 @@ public:
   static std::span<const std::string_view> propertyNames();
 
   /**
+   * Returns the stable keyword spellings for a named CSS property with a keyword table.
+   *
+   * The caller supplies the canonical lowercase property name. The result omits CSS-wide keywords
+   * and contains no suggestions for values that are not covered by a keyword table.
+   *
+   * @param name Canonical CSS property name.
+   * @return Read-only parser keyword spellings with static lifetime.
+   */
+  static std::span<const std::string_view> keywordValues(std::string_view name);
+
+  /**
    * Returns true if a name is a valid SVG presentation attribute.
    *
    * @param name Attribute name.

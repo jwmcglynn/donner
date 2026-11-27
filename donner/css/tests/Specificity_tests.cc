@@ -63,6 +63,21 @@ TEST(Specificity, CascadePriorityImportantFactoriesKeepOriginAbcAndObjectSize) {
   }
 }
 
+TEST(Specificity, EncodedPriorityPreservesNormalRankAndReversesOnlyImportantRuleOrigins) {
+  constexpr auto first = Specificity::FromABC(10, 0, 0).withLayerRank(1);
+  constexpr auto last = Specificity::FromABC(0, 0, 1).withLayerRank(0xffff);
+  EXPECT_LT(first, last);
+  EXPECT_GT(Specificity::Important(first), Specificity::Important(last));
+  EXPECT_EQ(Specificity::Important(last).layerRank(), 0xffff);
+  EXPECT_EQ(Specificity::Important().layerRank(), 0);
+  EXPECT_GT(Specificity::Important(), Specificity::Important(first));
+  EXPECT_LT(first.toUserAgentSpecificity(), last.toUserAgentSpecificity());
+  EXPECT_GT(Specificity::Important(first.toUserAgentSpecificity()),
+            Specificity::Important(last.toUserAgentSpecificity()));
+  EXPECT_LT(Specificity::Important(Specificity::StyleAttribute().withLayerRank(1)),
+            Specificity::Important(Specificity::StyleAttribute().withLayerRank(2)));
+}
+
 TEST(Specificity, CascadePriorityInlineOriginAndImportantDiagnosticsRemainDistinct) {
   EXPECT_TRUE(Specificity::StyleAttribute().isStyleAttribute());
   EXPECT_TRUE(Specificity::Important(Specificity::StyleAttribute()).isStyleAttribute());

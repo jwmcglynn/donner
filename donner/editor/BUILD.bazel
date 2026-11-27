@@ -791,8 +791,11 @@ donner_cc_library(
     srcs = ["XmlAutocomplete.cc"],
     hdrs = ["XmlAutocomplete.h"],
     deps = [
+        ":css_source_syntax",
         "//donner/base",
         "//donner/base/xml",
+        "//donner/css",
+        "//donner/css/parser",
         "//donner/svg",
         "//donner/svg/properties:property_parsing",
     ],
@@ -1265,6 +1268,7 @@ donner_cc_library(
         ":canvas_scrollbars",
         ":clipboard_interface",
         ":compositor_debug_panel",
+        ":css_source_syntax",
         ":dialog_presenter",
         ":disclosure_chevron",
         ":document_pixel_sampler",
@@ -1834,10 +1838,25 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "css_source_syntax",
+    srcs = ["CssSourceSyntax.cc"],
+    hdrs = ["CssSourceSyntax.h"],
+    deps = [
+        ":text_buffer",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/css:core",
+        "//donner/css/parser",
+        "//donner/svg/properties:property_parsing",
+    ],
+)
+
+donner_cc_library(
     name = "text_editor_core",
     srcs = ["TextEditorCore.cc"],
     hdrs = ["TextEditorCore.h"],
     deps = [
+        ":css_source_syntax",
         ":source_edit_intent",
         ":text_buffer",
         "//donner/base",

@@ -3927,6 +3927,28 @@ TEST(EditorWindowTest, PresentationTimeoutPublishesItsWinningAttributionImmediat
   EXPECT_EQ(observed.loss.timedOutElapsedMs, 73);
 }
 
+TEST(EditorWindowTest, StalePresentationCannotAdoptCurrentImGuiPointerIdentity) {
+  EditorWindow window(EditorWindowOptions{.title = "Sealed presentation input",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ImGuiIO& io = ImGui::GetIO();
+  io.MousePos = ImVec2(91.0f, 92.0f);
+  io.MouseDown[0] = false;
+
+  window.setPresentationFrameIdentity(
+      /*frameId=*/1, /*captureId=*/2, /*documentGeneration=*/3, /*frameVersion=*/4,
+      /*pointerX=*/12.0, /*pointerY=*/34.0, /*mouseDown=*/true,
+      /*inputRepresented=*/false, /*viewportZoom=*/1.5);
+
+  const auto& stamp = window.presentationInputStampForTesting();
+  EXPECT_DOUBLE_EQ(stamp.pointerX, 12.0);
+  EXPECT_DOUBLE_EQ(stamp.pointerY, 34.0);
+  EXPECT_TRUE(stamp.mouseDown);
+  EXPECT_FALSE(stamp.inputRepresented);
+}
+
 TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
   EditorWindow window(EditorWindowOptions{.title = "Completed document ordering",
                                           .initialWidth = 64,
@@ -3948,7 +3970,7 @@ TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
         testing::Field("captureId", &Identity::captureId, testing::Eq(expected.captureId))));
   };
   window.setPresentationFrameIdentity(1, older.captureId, older.documentGeneration,
-                                      older.frameVersion, true, 1.0);
+                                      older.frameVersion, 0.0, 0.0, false, true, 1.0);
   window.beginFrame();
   window.endFrame();
   const std::uint64_t olderSerial = device.lastSubmittedSerial();
@@ -3958,7 +3980,7 @@ TEST(EditorWindowTest, DocumentAcknowledgmentWaitsForCompletedSubmission) {
   const std::uint64_t wakeBefore = window.presentedDocumentWakeSerialForTesting();
   window.requestWakeAfterPresentedDocument(result);
   window.setPresentationFrameIdentity(2, result.captureId, result.documentGeneration,
-                                      result.frameVersion, true, 1.0);
+                                      result.frameVersion, 0.0, 0.0, false, true, 1.0);
   window.beginFrame();
   window.endFrame();
   const std::uint64_t resultSerial = device.lastSubmittedSerial();
@@ -3991,7 +4013,7 @@ TEST(EditorWindowTest, FailedGpuCompletionRetiresWithoutDocumentAcknowledgment) 
     ASSERT_THAT(window.geodeFramebufferDevice(), testing::NotNull());
     std::uint64_t completed = 0;
     window.setPresentationCompletionProbeForTesting([&] { return completed; });
-    window.setPresentationFrameIdentity(1, 11, 7, 1, true, 1.0);
+    window.setPresentationFrameIdentity(1, 11, 7, 1, 0.0, 0.0, false, true, 1.0);
     window.requestWakeAfterPresentedDocument({7, 1, 11});
     const std::uint64_t wakeBefore = window.presentedDocumentWakeSerialForTesting();
     window.beginFrame();
