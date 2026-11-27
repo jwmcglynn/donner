@@ -14,6 +14,18 @@ struct FramePresentationTestAccess {
     cache.presentationResources_ = std::move(resources);
   }
 
+  /// Installs simulated live tile coverage without a graphics context for scheduling tests.
+  static void installActiveRaster(
+      GlTextureCache& cache,
+      std::shared_ptr<const GlTextureCache::PresentationResources> resources) {
+    const auto& coverage = resources->coverage();
+    cache.tiles_ = resources->tiles();
+    cache.activeTilesViewportBounded_ = coverage.activeTilesViewportBounded;
+    cache.activeRasterDocumentRect_ = coverage.activeRasterDocumentRect;
+    cache.activeOutputSizePx_ = coverage.activeOutputSizePx;
+    installResources(cache, std::move(resources));
+  }
+
   static std::shared_ptr<const GlTextureCache::PresentationResources> resources(
       std::shared_ptr<const CapturedPresentation> capture,
       std::vector<GlTextureCache::TileView> tiles, PresentationCoverageDiagnostics coverage = {},

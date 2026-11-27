@@ -582,9 +582,19 @@ private:
   CanvasCommitPlan prepareCanvasCommit(const EditorRasterViewport& rasterViewport,
                                        Vector2i actualDocumentCanvas, bool hasActiveDrag,
                                        bool pendingCanvasSelectionPress);
-  bool needsOverviewForRender(EditorApp& app, const EditorRasterViewport& rasterViewport,
-                              bool hasActiveDrag, const GlTextureCache* textures,
-                              bool willCommitCanvas);
+  /// Whether this translation release can wait for the visible render before refreshing overview.
+  /// @param app Current document and its capture identity.
+  /// @param viewport Camera of the release request.
+  /// @param rasterViewport Exact visible raster of the release request.
+  /// @param textures Installed render resources, or null when none are usable.
+  /// @param selectedEntity The entity still selected after mouse-up.
+  bool canSettleOnVisibleRaster(const EditorApp& app, const ViewportState& viewport,
+                                const EditorRasterViewport& rasterViewport,
+                                const GlTextureCache* textures, Entity selectedEntity) const;
+  bool needsOverviewForRender(EditorApp& app, const ViewportState& viewport,
+                              const EditorRasterViewport& rasterViewport, bool hasActiveDrag,
+                              const GlTextureCache* textures, bool willCommitCanvas,
+                              SelectedRenderDemand& selection);
   bool canPostViewportRender(bool selectedViewportDeferred, bool needsOverviewInfill,
                              bool captureNeeded, bool supersedeInFlight);
   void prepareSelectedRenderSchedule(EditorApp& app, const ViewportState& viewport,
