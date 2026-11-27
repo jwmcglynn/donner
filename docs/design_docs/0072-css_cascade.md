@@ -1,6 +1,6 @@
 # Design: CSS Cascade Performance, Custom Properties, Layers, Live Editing and Parallelism
 
-**Status:** Draft
+**Status:** Implemented
 **Author:** Claude Fable 5.2
 **Drafted by:** Claude Opus 5.5
 **Requested by:** Jeff McGlynn
@@ -10,16 +10,13 @@
 
 ## Summary
 
-Donner resolves style by testing every rule of every applicable stylesheet against every element,
-then re-parsing each matched declaration into the element's `PropertyRegistry`. Any edit to a class,
-`id`, `style` attribute, presentation attribute or stylesheet restyles the whole document. Each
-element holds its own computed-style record, a 4,840-byte `PropertyRegistry`, even when hundreds of
-elements compute the same style. Custom properties (`var()`) and cascade layers (`@layer`) are not
-supported. Typing in a `<style>` element reparses the whole stylesheet and restyles the whole
-document, and the source editor has no CSS-aware highlighting or value completion.
+Donner indexes applicable rules, filters ancestor-dependent selectors, and shares immutable
+computed-style records through a matched-properties cache. It supports bounded custom properties
+and `var()` substitution, cascade layers, incremental stylesheet reparsing and selective
+restyling. The source editor highlights CSS and completes properties, values, selectors and custom
+property names.
 
-This design measures that cost, surveys how browser engines make style resolution fast and how
-they implement the missing features, and commits to
+This design records the performance model, feature semantics, validation and remaining work in
 four parts:
 
 **Part A: Performance.**
@@ -199,9 +196,8 @@ same harness, machine class and method. Each goal names the counter or timer tha
 
 ## Next Steps
 
-- Close out B6 with the bounded variable-substitution and SVG inheritance tests below.
-  Selective stylesheet restyling landed in [#2789](https://github.com/jwmcglynn/donner/pull/2789)
-  after incremental stylesheet reparsing in [#2788](https://github.com/jwmcglynn/donner/pull/2788).
+- Reduce ordinary-document style cost for custom-property and layer support without weakening
+  cascade, inheritance, imports, mutation invalidation or resource bounds.
 
 ## Implementation Plan
 
@@ -261,9 +257,9 @@ including tests and review fixes. "After" names the milestones that must land fi
     rule-free 1,000-element document (from 6.03 ms); on a 14-core Apple silicon desktop (load
     average 5.8 to 8.1, six alternating runs) 0.87, 3.95, 8.51 and 1.32 ms (from 2.55, 20.17, 8.86
     and 1.44 ms). The differential test, the fuzzer and the Wasm size checks pass: the renderer's
-    Wasm is 2,340,052 bytes raw and 925,917 gzipped (ceilings 2,500,000 and 1,020,000), the editor's
-    10,623,727 and 3,385,346 (A3 ceilings 10,880,000 and 3,570,000). For C1, the raw editor
-    Wasm ceiling is 11,424,000 bytes.
+    Wasm budgets are 2,500,000 raw bytes and 1,020,000 gzip bytes for the renderer, enforced by
+    `//donner/svg/renderer/wasm:wasm_size_tests`, and 11,424,000 raw bytes and 3,570,000 gzip bytes
+    for the editor, enforced by `//donner/editor/wasm:wasm_geode_package_size_tests`.
 - [x] Milestone A4: Matcher constant factors. The independent acceptance threshold is a 5%
   median improvement in candidate match time.
   - [x] Keep the inline cursor stack for short selector chains ([#2779](https://github.com/jwmcglynn/donner/pull/2779)).
@@ -346,9 +342,7 @@ Part A estimate: 30.5 engineering days.
         deleter.
   - Done when: custom properties cascade and inherit in unit tests, computed styles of the
     existing corpus are unchanged, and the shared-map release regression is green.
-  - Two matched runs in [#2783](https://github.com/jwmcglynn/donner/pull/2783) measured splash
-    style-time increases of 3.3% and 4.4%. Reducing style overhead on documents without custom
-    properties remains an open optimization.
+  - Reducing style overhead on documents without custom properties remains an open optimization.
 - [x] Milestone B2: `var()` substitution (4 days,
       [#2784](https://github.com/jwmcglynn/donner/pull/2784)). After B1.
   - [x] Mark declarations containing `var()` at parse time, hold them as pending substitutions in
@@ -359,14 +353,14 @@ Part A estimate: 30.5 engineering days.
 - [x] Milestone B3: `var()` in presentation attributes and shorthands (2 days,
       [#2784](https://github.com/jwmcglynn/donner/pull/2784)). After B2.
   - Done when: the ported presentation-attribute and shorthand cases pass.
-- [x] Milestone B4: `@layer` and `@import ... layer` parsing (3.5 days).
-      Landed in [#2787](https://github.com/jwmcglynn/donner/pull/2787). No dependency.
+- [x] Milestone B4: `@layer` and `@import ... layer` parsing (3.5 days,
+      [#2787](https://github.com/jwmcglynn/donner/pull/2787)). No dependency.
   - [x] Parse layer statements and blocks (nested, dotted, anonymous) and assign each retained
         rule a layer; compute the document's layer order.
   - Done when: parser tests and `stylesheet_parser_fuzzer` cover every form, and rules inside
     `@layer` blocks are retained instead of dropped.
-- [x] Milestone B5: Layer order in the cascade (2.5 days).
-      Landed in [#2787](https://github.com/jwmcglynn/donner/pull/2787). After B4.
+- [x] Milestone B5: Layer order in the cascade (2.5 days,
+      [#2787](https://github.com/jwmcglynn/donner/pull/2787)). After B4.
   - [x] Build the document layer tree, assign post-order ranks, add the layer rank to
         `css::Specificity` with importance reversal, place presentation attributes below every
         author layer, and check `Property::inheritFrom` with layered declarations.
@@ -378,26 +372,25 @@ Part A estimate: 30.5 engineering days.
         that loads after the first frame, and rank recomputation after an edit adds a layer.
   - Done when: the ported layer cases pass and computed styles of documents without layers are
     unchanged.
-  - Landed as [`e9fb97187`](https://github.com/jwmcglynn/donner/commit/e9fb97187bdc015624a748345ce2d527b18abf4e)
-    after [unified CI passed](https://github.com/jwmcglynn/donner/actions/runs/45930084467). The
-    editor Wasm package measured 10,937,106 bytes raw and 3,487,634 bytes gzipped. Only the raw
-    budget changed, from 10,880,000 to 11,424,000 bytes. The gzip budget stayed at 3,570,000 bytes.
-- [x] Milestone B6: Conformance cases (2 days). After B3 and B5.
-  - Done when: the full set in [Part B tests](#part-b-tests) lands and passes CI.
-  - [#2787](https://github.com/jwmcglynn/donner/pull/2787) landed adapted WPT cases for brace-wrapped
-    fallbacks, inherited `stroke-width="var(...)"`, and cascade layers.
-  - The remaining two WPT ports use short declarations. Substitution tests lower the component
+  - The editor Wasm package budgets are 11,424,000 raw bytes and 3,570,000 gzip bytes, enforced by
+    `//donner/editor/wasm:wasm_geode_package_size_tests`.
+- [x] Milestone B6: Conformance cases (2 days,
+      [#2804](https://github.com/jwmcglynn/donner/pull/2804)). After B3 and B5.
+  - Verification: the full set in [Part B tests](#part-b-tests) is registered in CI.
+  - Existing coverage includes adapted WPT cases for brace-wrapped fallbacks, inherited
+    `stroke-width="var(...)"`, and cascade layers.
+  - The final two bounded WPT ports use short declarations. Substitution tests lower the component
     and byte allowances to verify guaranteed-invalid fallback and rejection of partial output.
     The SVG cases check inherited computed values and neighboring paint and opacity declarations.
   - Separate resource tests verify pre-append admission, iterative resolution of a 2,048-name
     chain, and refusal to retain token text beyond the 1 MiB cap.
 
-Part B was originally estimated at 18 engineering days.
+Part B estimate: 18 engineering days.
 
 ### Part C Milestones
 
-- [x] Milestone C1: Rule-level incremental stylesheet reparse (5.5 days).
-      Landed in [#2788](https://github.com/jwmcglynn/donner/pull/2788). No dependency.
+- [x] Milestone C1: Rule-level incremental stylesheet reparse (5.5 days,
+      [#2788](https://github.com/jwmcglynn/donner/pull/2788)). No dependency.
   - [x] Carry the source edit to the style projection: `SVGDocument::applySourceEdit` passes the
         `XMLSourceDelta` it already returns alongside the `NodeValueChanged` mutation, and the
         projection maps it to stylesheet offsets through the stylesheet's source map.
@@ -407,24 +400,20 @@ Part B was originally estimated at 18 engineering days.
   - [x] Add the incremental-versus-full differential fuzzer.
   - Done when: the fuzzer is green and `ProjectStyleContents` uses the incremental path for
     `<style>` text edits.
-  - Landed as [`cf0862913`](https://github.com/jwmcglynn/donner/commit/cf0862913607db4dee8abb722f400cde5f94e0de).
-    [Main CI passed](https://github.com/jwmcglynn/donner/actions/runs/45944575112) on that revision.
-- [x] Milestone C2: Restyle only elements affected by changed rules (3 days). Landed in
-      [#2789](https://github.com/jwmcglynn/donner/pull/2789). Head `054d8188` passed
-      [unified CI](https://github.com/jwmcglynn/donner/actions/runs/45944815156/attempts/2)
-      and landed as `8b4a64253`. After C1, A3 and A5.
+- [x] Milestone C2: Restyle only elements affected by changed rules (3 days,
+      [#2789](https://github.com/jwmcglynn/donner/pull/2789)). After C1, A3 and A5.
   - Done when: the keystroke goals are met and the differential edit test covers stylesheet
     edits.
-  - The table gives medians for one declaration-value edit in `donner_splash.svg`. The paired
-    benchmark used 18 launches per version and covered seven keystroke cases.
+  - Current medians for one declaration-value edit in `donner_splash.svg` come from an 18-launch
+    paired benchmark covering seven keystroke cases.
     [Measurement details](https://github.com/jwmcglynn/donner/pull/2789).
 
-    | Measurement | C1 only | C1 + C2 |
-    | --- | ---: | ---: |
-    | Elements cascaded | 622 | 1 |
-    | Source edit | 0.937 ms | 0.682 ms |
-    | Next null frame | 5.241 ms | 0.3725 ms |
-    | Style work | 1.755 ms | 0.024 ms |
+    | Measurement | Selective edit |
+    | --- | ---: |
+    | Elements cascaded | 1 |
+    | Source edit | 0.682 ms |
+    | Next null frame | 0.3725 ms |
+    | Style work | 0.024 ms |
 
 - [x] Milestone C3: CSS highlighting in the source pane (2 days,
       [#2785](https://github.com/jwmcglynn/donner/pull/2785)). No dependency.
@@ -436,7 +425,7 @@ Part B was originally estimated at 18 engineering days.
     [CSS Highlighting and Completion](#css-highlighting-and-completion) has a headless test
     returning suggestions from its data source.
 
-Part C was originally estimated at 13.5 engineering days. C1, C3 and C4 have landed.
+Part C estimate: 13.5 engineering days.
 
 ### Part D Milestones
 
@@ -486,8 +475,8 @@ A1 first; A2, A3, A6, A8, B4, C1 and C3 can then proceed in parallel; A4 follows
 A3 and A6; A5 follows A2; A9 follows A3 and A8; B1 to B3 follow A8; B5 follows B4; B6 closes Part B;
 C2 follows C1, A3 and A5; C4 follows C3 and, for `var()` names, B2; D0 follows A8; D1 follows D0,
 A7, A9 and the scheduler milestones S1 to S3 of [0073-task_scheduler](0073-task_scheduler.md); D2
-and D3 follow D1. The original estimate was 71 engineering days across A (30.5), B (18), C (13.5)
-and D (9). The scheduler is estimated in 0073.
+and D3 follow D1. Total estimate: 71 engineering days across A (30.5), B (18), C (13.5) and D (9).
+The scheduler is estimated in 0073.
 
 ## Background
 
