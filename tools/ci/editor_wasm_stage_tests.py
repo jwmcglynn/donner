@@ -218,13 +218,14 @@ class EditorWasmStageTest(unittest.TestCase):
         package = self.runner_temp / "editor-wasm-package-geode"
         (package / "fonts").mkdir(parents=True)
         for name in ("donner_icon.svg", "editor-bootstrap.js", "editor.css", "editor.js",
-                     "enable-threads.js", "index.html", "catalog-fonts.js", "browser-file-dialogs.js",
+                     "enable-threads.js", "catalog-fonts.js", "browser-file-dialogs.js",
                      "packaged-resource-loader.js"):
             (package / name).write_text(name)
         (package / "editor.wasm").write_bytes(b"\0asm\1\0\0\0")
         (package / "editor.js").write_text("\n".join(f"Module.{name}={name};" for name in (
             "callMain", "HEAPU8", "_malloc", "_free", "_DonnerPackagedResourceManifest",
             "_DonnerInstallPackagedResource", "_DonnerFailPackagedResource")))
+        shutil.copyfile(self.index, package / "index.html")
         (package / "editor-asyncify.js").write_bytes((package / "editor.js").read_bytes())
         (package / "editor-asyncify.wasm").write_bytes(b"\0asm\1\0\0\0\0\2\1a")
         (package / "editor-jspi.js").write_text("probe")
