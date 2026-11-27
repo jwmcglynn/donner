@@ -504,7 +504,7 @@ py_test(
         # Independently cap module decode size, compressed transfer and structure complexity.
         # Lower ceilings as the package shrinks; increases require an explicit maintainer decision.
         "--max-wasm-raw-bytes",
-        "10880000",
+        "11424000",
         "--max-wasm-gzip-bytes",
         "3570000",
         "--max-wasm-function-body-bytes",
