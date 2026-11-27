@@ -104,7 +104,9 @@ _EDITOR_LINKOPTS = [
     # but leaves any real frame stage as its own Wasm function; it costs ~40 KiB of raw module size
     # and takes the largest function body from 46,391 to 28,417 bytes. This is a tightening of the
     # Safari contract; it is never to be relaxed back.
-    "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608",
+    # Fold similar bodies after Asyncify, then compact the resulting code under the same
+    # inlining and static-image limits as the first optimization pass.
+    "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608,--merge-similar-functions,-Oz",
     "-pthread",
     "-sEXIT_RUNTIME=0",
     # The app thread owns the canvas and all GPU objects; raster workers dispatch commands to it.
@@ -504,9 +506,9 @@ py_test(
         # Independently cap module decode size, compressed transfer and structure complexity.
         # Lower ceilings as the package shrinks; increases require an explicit maintainer decision.
         "--max-wasm-raw-bytes",
-        "11424000",
+        "11274000",
         "--max-wasm-gzip-bytes",
-        "3570000",
+        "3550000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",

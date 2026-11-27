@@ -87,6 +87,16 @@ noted as follow-on surfaces but are not the primary focus.
   - [x] Record final-vs-baseline numbers per target and the ranked remaining
         opportunities; rewrite this doc's status.
 
+## Editor Wasm
+
+The editor release profile merges similar functions after Asyncify and compacts
+the result under the existing inlining limits. Memory packing stays disabled
+to limit startup compilation work in threaded browsers.
+`//donner/editor/wasm:hosted_wasm_geode_package_size_tests` enforces module
+raw and gzip size, the largest function body, the data segment count, and
+the complete package size. Renderer Wasm and native linked size have their own
+checks.
+
 ## Proposed Architecture
 
 The report is produced by `tools/binary_size.sh`, run from any Donner checkout:
