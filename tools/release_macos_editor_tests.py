@@ -8,6 +8,13 @@ from tools import bcr_preflight, release_candidate
 
 
 class NativeEditorReleaseContractTest(unittest.TestCase):
+    def test_diagnostic_companions_cannot_enter_the_editor_archive(self):
+        from tools import release_macos_editor as native
+        for name in ("binary.debug", "delivery.json", "custody.json", "binary.dSYM/Contents/Info.plist"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "diagnostic"):
+                    native._safe_name(native.BUNDLE + "/Contents/Resources/" + name)
+
     def test_native_editor_is_required_by_the_preflight_and_release_record(self):
         self.assertIn("editor-macos", release_candidate.RELEASE_ROLES)
         self.assertIn("editor-macos", release_candidate.PREFLIGHT_ROLES)
@@ -146,7 +153,7 @@ class MacosEditorPackageTest(unittest.TestCase):
         executable.write_bytes(executable.read_bytes() + self.build_info.read_bytes())
         self.output = self.base / "artifacts"
 
-    def package(self):
+    def package(self, **delivery):
         from unittest import mock
         with mock.patch.object(self.native, "validate_native") as validate, \
              mock.patch.object(self.native, "_check_entrypoint"), \
@@ -156,9 +163,40 @@ class MacosEditorPackageTest(unittest.TestCase):
                                return_value="Apple clang 17"):
             result = self.native.package(root=self.root, app=self.app, notice=self.notice,
                                          compiler_probe=self.base / "probe", build_info=self.build_info, output=self.output,
-                                         commit=self.commit, run_id="123", attempt="2")
-            self.assertEqual(validate.call_count, 2)
+                                         commit=self.commit, run_id="123", attempt="2", **delivery)
+            self.assertEqual(validate.call_count, 3 if delivery else 2)
             return result
+
+    def test_delivery_packages_only_the_prepared_copy(self):
+        from hashlib import sha256
+        import shutil
+        from unittest import mock
+        original = (self.app / "Contents/MacOS/Donner").read_bytes()
+        fresh = self.base / "prepared.app"
+        shutil.copytree(self.app, fresh)
+        executable = fresh / "Contents/MacOS/Donner"
+        executable.write_bytes(original + b"final seal")
+        with mock.patch.object(self.native.native_producer, "prepare_editor", return_value=fresh) as prepare:
+            result = self.package(delivery_work=self.base / "work", delivery_symbols=self.base / "symbols",
+                                  dsym=self.base / "matching.dSYM")
+        prepare.assert_called_once_with(self.app.resolve(), self.base / "work", self.base / "symbols",
+                                        self.base / "matching.dSYM")
+        self.assertEqual(result["files"][self.native.BUNDLE + "/Contents/MacOS/Donner"]["sha256"],
+                         sha256(executable.read_bytes()).hexdigest())
+        self.assertEqual((self.app / "Contents/MacOS/Donner").read_bytes(), original)
+
+    def test_partial_delivery_arguments_cannot_fall_back_to_unstripped_input(self):
+        from unittest import mock
+        with mock.patch.object(self.native.native_producer, "prepare_editor") as prepare:
+            with self.assertRaisesRegex(ValueError, "matched dSYM"):
+                self.package(delivery_work=self.base / "work")
+            prepare.assert_not_called()
+
+    def test_default_packaging_does_not_run_the_strip_helper(self):
+        from unittest import mock
+        with mock.patch.object(self.native.native_producer, "prepare_editor") as prepare:
+            self.package()
+            prepare.assert_not_called()
 
     def verify(self, **changes):
         options = dict(root=self.root, artifacts=self.output, commit=self.commit,

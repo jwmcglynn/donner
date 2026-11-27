@@ -857,6 +857,27 @@ py_binary(
 )
 
 py_library(
+    name = "native_producer",
+    srcs = ["native_producer.py"],
+    deps = [":native_delivery_lib"],
+)
+
+py_test(
+    name = "native_producer_tests",
+    size = "small",
+    srcs = ["native_producer_tests.py"],
+    data = [
+        "//:.bazelrc",
+        "//:github_action_definitions",
+    ],
+    deps = [
+        ":bcr_preflight",
+        ":native_producer",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_library(
     name = "release_cli",
     srcs = ["release_cli.py"],
     deps = [":native_delivery_lib"],
@@ -878,6 +899,7 @@ py_library(
     srcs = ["release_macos_editor.py"],
     deps = [
         ":bcr_source",
+        ":native_producer",
         ":release_cli",
     ],
 )

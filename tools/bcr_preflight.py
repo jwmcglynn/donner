@@ -183,48 +183,94 @@ def consumer_plan(layout: Layout, workspace: str, commit: str) -> list[Command]:
     ]
 
 
-def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
-             attempt: str) -> list[Command]:
-    """Build the release CLI and bind it to the preflight candidate.
+def trusted_native_delivery(environ: Mapping[str, str]) -> bool:
+    """Select the paired producer only for trusted main release-candidate runs."""
+    return (environ.get("GITHUB_REPOSITORY") == "jwmcglynn/donner"
+            and environ.get("GITHUB_REF") == "refs/heads/main"
+            and environ.get("GITHUB_EVENT_NAME") in ("schedule", "workflow_dispatch"))
 
-    The repository ignores MODULE.bazel.lock: resolve once, then prove the build is complete
-    under that generated, retained lockfile.
-    """
-    commands = [
+
+def _native_flags(platform: str) -> tuple[str, ...]:
+    # Add line tables to the existing release configuration. Do not change its compiler,
+    # target architecture, optimization level, or feature switches.
+    flags = ("--copt=-gline-tables-only", "--copt=-fdebug-compilation-dir=.",
+             "--copt=-ffile-compilation-dir=.", "--strip=never",
+             "--remote_cache=", "--remote_executor=", "--disk_cache=",
+             "--remote_upload_local_results=false", "--bes_backend=", "--bes_results_url=")
+    if platform == "darwin-arm64":
+        return flags + ("--apple_generate_dsym",)
+    return flags + ("--linkopt=-Wl,--build-id=sha1",)
+
+
+def cli_plan(layout: Layout, platform: str, commit: str, run_id: str,
+             attempt: str, native: bool = False) -> list[Command]:
+    """Build under the retained lock and optionally prepare paired fresh delivery copies."""
+    bazel = ("bazelisk", "--nosystem_rc", "--nohome_rc") if native else ("bazelisk",)
+    flags = NATIVE_RELEASE_FLAGS + (_native_flags(platform) if native else ())
+    build_flags = flags + (("--output_groups=+dsyms",) if native and platform == "darwin-arm64" else ())
+    commands = []
+    if native:
+        commands.append(Command("Reserve native delivery and diagnostic staging",
+                        ("python3", "-B", "-m", "tools.native_producer", "initialize",
+                         "--temp", layout.temp, "--platform", platform)))
+    commands.extend([
         Command("Resolve the module graph",
-                ("bazelisk", "build", "--lockfile_mode=update",
-                 *NATIVE_RELEASE_FLAGS, *RELEASE_TARGETS)),
+                (*bazel, "build", "--lockfile_mode=update", *build_flags, *RELEASE_TARGETS)),
         Command("Build under the resolved lockfile",
-                ("bazelisk", "build", "--lockfile_mode=error",
-                 *NATIVE_RELEASE_FLAGS, *RELEASE_TARGETS)),
+                (*bazel, "build", "--lockfile_mode=error", *build_flags, *RELEASE_TARGETS)),
         Command("Test NOTICE coverage",
-                ("bazelisk", "test", "--lockfile_mode=error", *NATIVE_RELEASE_FLAGS, NOTICE_COVERAGE)),
-        Command("Package the CLI",
+                (*bazel, "test", "--lockfile_mode=error", *flags, NOTICE_COVERAGE)),
+    ])
+    binary = "bazel-bin/donner/svg/tool/donner-cli"
+    if native:
+        prepare = ("python3", "-B", "-m", "tools.native_producer", "prepare-cli",
+                   "--temp", layout.temp, "--platform", platform, "--binary", binary)
+        if platform == "darwin-arm64":
+            prepare += ("--dsym", "bazel-bin/donner/svg/tool/donner-cli.dSYM")
+        commands.append(Command("Prepare the paired fresh CLI delivery copy", prepare))
+        binary = f"{layout.temp}/donner-native-delivery/{platform}/donner-cli"
+    commands.append(Command("Package the CLI",
                 ("python3", "-B", "-m", "tools.release_cli", "package",
-                 "--platform", platform, "--binary", "bazel-bin/donner/svg/tool/donner-cli",
+                 "--platform", platform, "--binary", binary,
                  "--notice", "bazel-bin/third_party/licenses/notice_cli.txt",
                  "--resources", "bazel-bin/tools/ci/release_cli_resources.assets",
                  "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                  "--output", layout.cli_output(platform), "--commit", commit,
-                 "--run-id", run_id, "--attempt", attempt)),
-    ]
+                 "--run-id", run_id, "--attempt", attempt)))
     if platform == "darwin-arm64":
-        commands.extend(editor_macos_plan(layout, commit, run_id, attempt))
+        commands.extend(editor_macos_plan(layout, commit, run_id, attempt, native=native))
+    if native:
+        commands.append(Command("Bind the curated diagnostic inventory to final products",
+                        ("python3", "-B", "-m", "tools.native_producer", "finalize",
+                         "--temp", layout.temp, "--platform", platform, "--commit", commit,
+                         "--run-id", run_id, "--attempt", attempt)))
     return commands
 
 
-def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) -> list[Command]:
+def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str,
+                      native: bool = False) -> list[Command]:
+    bazel = ("bazelisk", "--nosystem_rc", "--nohome_rc") if native else ("bazelisk",)
     targets = ("//donner/editor:editor_macos_app", "//third_party/licenses:notice_release_editor_txt",
                "//tools/ci:release_compiler_identity", "//donner/editor:editor_build_info_txt")
     flags = (*NATIVE_RELEASE_FLAGS, "--config=geode", "--config=text-full",
              "--//build_defs:enable_tracy=false", f"--//build_defs:release_source_commit={commit}")
+    build_flags = flags
+    delivery = ()
+    if native:
+        flags += _native_flags("darwin-arm64")
+        build_flags = flags + ("--output_groups=+dsyms",)
+        # Request the actual cc_binary's dSYM, not an output group on its launcher wrapper.
+        targets += ("//donner/editor:editor_impl",)
+        delivery = ("--delivery-work", f"{layout.temp}/donner-native-delivery/darwin-arm64/editor",
+                    "--delivery-symbols", f"{layout.temp}/donner-native-symbols/darwin-arm64/editor",
+                    "--dsym", "bazel-bin/donner/editor/editor_impl.dSYM")
     return [
         Command("Resolve native editor dependencies",
-                ("bazelisk", "build", "--lockfile_mode=update", *flags, *targets)),
+                (*bazel, "build", "--lockfile_mode=update", *build_flags, *targets)),
         Command("Build native editor under the resolved lockfile",
-                ("bazelisk", "build", "--lockfile_mode=error", *flags, *targets)),
+                (*bazel, "build", "--lockfile_mode=error", *build_flags, *targets)),
         Command("Test native editor NOTICE coverage",
-                ("bazelisk", "test", "--lockfile_mode=error", *flags,
+                (*bazel, "test", "--lockfile_mode=error", *flags,
                  f"--test_env=DONNER_RELEASE_SOURCE_COMMIT={commit}",
                  "//tools:editor_notice_coverage_tests", "//tools:release_macos_editor_native_tests",
                  "//tools:editor_build_info_tests")),
@@ -235,7 +281,7 @@ def editor_macos_plan(layout: Layout, commit: str, run_id: str, attempt: str) ->
                  "--notice", "bazel-bin/third_party/licenses/notice_release_editor.txt",
                  "--compiler-probe", "bazel-bin/tools/ci/release_compiler_identity",
                  "--output", f"{layout.temp}/donner-editor-macos", "--commit", commit,
-                 "--run-id", run_id, "--attempt", attempt)),
+                 "--run-id", run_id, "--attempt", attempt, *delivery)),
     ]
 
 
@@ -347,6 +393,8 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     commands.add_parser("consumer")
     cli = commands.add_parser("cli")
     cli.add_argument("--platform", required=True, choices=sorted(PLATFORMS))
+    cli.add_argument("--prepare-native-delivery", action="store_true",
+                     help="prepare and verify paired local outputs without publishing")
     verify = commands.add_parser("verify")
     verify.add_argument("--with-source", action="store_true")
     commands.add_parser("explain-missing-cli")
@@ -371,7 +419,8 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
         return run_lane("BCR consumer", consumer_plan(layout, workspace, args.commit), environ)
     if args.command == "cli":
         return run_lane(f"Release CLI ({args.platform})",
-                        cli_plan(layout, args.platform, args.commit, args.run_id, args.attempt),
+                        cli_plan(layout, args.platform, args.commit, args.run_id, args.attempt,
+                                 native=args.prepare_native_delivery or trusted_native_delivery(environ)),
                         environ)
     return run_lane("Preflight artifact verification",
                     verify_plan(layout, args.commit, args.run_id, args.attempt,

@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools import bcr_source, release_cli
+from tools import bcr_source, native_producer, release_cli
 
 
 SCHEMA = 2
@@ -47,6 +47,9 @@ def _safe_name(name: str) -> None:
         return
     if not name.startswith(BUNDLE + "/"):
         raise ValueError("native editor ZIP has an unsafe or unexpected path")
+    if any(part.casefold().endswith((".dsym", ".debug", ".dwo", ".pdb"))
+           or part.casefold() in ("delivery.json", "custody.json") for part in name.split("/")):
+        raise ValueError("native editor ZIP must not contain diagnostic companions")
     relative = name[len(BUNDLE) + 1:]
     path = PurePosixPath(relative)
     if (not relative or len(name) > 256 or not re.fullmatch(r"[A-Za-z0-9._/-]+", relative)
@@ -413,8 +416,9 @@ def _check_toolchain(root: Path, value: object) -> None:
 
 
 def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, build_info: Path, output: Path,
-            commit: str, run_id: str, attempt: str) -> dict:
-    """Package existing signed bytes once; native checks run before and after ZIP roundtrip."""
+            commit: str, run_id: str, attempt: str, delivery_work: Path | None = None,
+            delivery_symbols: Path | None = None, dsym: Path | None = None) -> dict:
+    """Package signed bytes, optionally stripping a fresh app before its final seal."""
     release_cli._run_identity(run_id, attempt)
     tree = release_cli._source_tree(root, commit)
     release_cli._check_notice(notice)
@@ -429,6 +433,12 @@ def package(*, root: Path, app: Path, notice: Path, compiler_probe: Path, build_
     if any(output.iterdir()):
         raise ValueError("native editor output directory must be empty")
     archive = output / ARCHIVE
+    delivery = (delivery_work, delivery_symbols, dsym)
+    if any(value is not None for value in delivery):
+        if not all(value is not None for value in delivery):
+            raise ValueError("native editor delivery needs work, symbols and the matched dSYM")
+        validate_native(app)
+        app = native_producer.prepare_editor(app.resolve(), delivery_work, delivery_symbols, dsym)
     files = create_validated_archive(root, app, notice, archive, commit)
     shutil.copyfile(lock, output / NAMES[3])
     shutil.copyfile(notice, output / NAMES[4])
@@ -502,6 +512,8 @@ def main() -> None:
         if name == "package":
             for flag in ("app", "notice", "compiler-probe", "build-info", "output"):
                 command.add_argument("--" + flag, type=Path, required=True)
+            for flag in ("delivery-work", "delivery-symbols", "dsym"):
+                command.add_argument("--" + flag, type=Path)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
     args = vars(parser.parse_args())

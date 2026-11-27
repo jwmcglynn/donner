@@ -1,6 +1,6 @@
 {
   "tree": {
-    "lines": 5155,
+    "lines": 5175,
     "comment_lines": 534,
     "multiline_runs": 66,
     "longest_run": 194,
@@ -17,12 +17,12 @@
       "longest_if": 0
     },
     ".github/workflows/bcr_preflight.yml": {
-      "lines": 337,
+      "lines": 357,
       "comment_lines": 31,
       "multiline_runs": 3,
       "longest_run": 2,
       "run_expressions": 0,
-      "longest_if": 109
+      "longest_if": 162
     },
     ".github/workflows/build_docs.yaml": {
       "lines": 77,
