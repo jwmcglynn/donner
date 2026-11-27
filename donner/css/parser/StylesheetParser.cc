@@ -18,6 +18,13 @@
 #include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/SelectorParser.h"
 
+#if defined(__clang__) && defined(__APPLE__) && defined(__OPTIMIZE__)
+#if !__has_feature(address_sanitizer) && !__has_feature(thread_sanitizer) && \
+    !__has_feature(undefined_behavior_sanitizer)
+#define DONNER_APPLE_LAYER_PARSER_MINSIZE 1
+#endif
+#endif
+
 namespace donner::css::parser {
 
 namespace {
@@ -191,6 +198,10 @@ void PopulateSelectorRuleSourceRanges(std::string_view str, const QualifiedRule&
   selectorRule->selectorEntrySourceRanges = SplitSelectorEntryRanges(
       str, selectorStart, selectorEnd, selectorRule->selector.entries.size());
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 /**
  * Try to parse a `url()` function into either a data URL or an external URL.
@@ -433,16 +444,16 @@ void ApplyFontFaceWidth(std::span<const ComponentValue> values, FontFace& fontFa
                                     std::max(first->percentage, last->percentage)});
 }
 
-void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& fontFace) {
+void ApplyFontFaceMatchingDescriptor(FontFaceDescriptor descriptor, const Declaration& declaration,
+                                     FontFace& fontFace) {
   if (declaration.important) {
     return;
   }
-  if (declaration.name.equalsLowercase("font-weight")) {
+  if (descriptor == FontFaceDescriptor::Weight) {
     ApplyFontFaceWeight(declaration.values, fontFace);
     return;
   }
-  if (declaration.name.equalsLowercase("font-stretch") ||
-      declaration.name.equalsLowercase("font-width")) {
+  if (descriptor == FontFaceDescriptor::Width) {
     ApplyFontFaceWidth(declaration.values, fontFace);
     return;
   }
@@ -450,7 +461,7 @@ void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& f
     return;
   }
   const ComponentValue& value = declaration.values.front();
-  if (declaration.name.equalsLowercase("font-style")) {
+  if (descriptor == FontFaceDescriptor::Style) {
     constexpr std::array<std::string_view, 3> kStyles = {"normal", "italic", "oblique"};
     if (const auto style = ParseFontFaceKeyword(value, kStyles, 0)) {
       fontFace.fontStyle = *style;
@@ -461,8 +472,8 @@ void ApplyFontFaceMatchingDescriptor(const Declaration& declaration, FontFace& f
 std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations) {
   FontFace fontFace;
   for (const Declaration& declaration : declarations) {
-    if (StringUtils::EqualsLowercase(declaration.name, std::string_view("font-family")) &&
-        !declaration.values.empty()) {
+    const auto descriptor = IdentifyFontFaceDescriptor(declaration.name);
+    if (descriptor == FontFaceDescriptor::Family && !declaration.values.empty()) {
       if (const Token* token = std::get_if<Token>(&declaration.values.front().value)) {
         if (token->is<Token::Ident>()) {
           fontFace.familyName = token->get<Token::Ident>().value;
@@ -470,10 +481,10 @@ std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations)
           fontFace.familyName = token->get<Token::String>().value;
         }
       }
-    } else if (StringUtils::EqualsLowercase(declaration.name, std::string_view("src"))) {
+    } else if (descriptor == FontFaceDescriptor::Source) {
       AppendFontFaceSources(declaration.values, fontFace);
     } else {
-      ApplyFontFaceMatchingDescriptor(declaration, fontFace);
+      ApplyFontFaceMatchingDescriptor(descriptor, declaration, fontFace);
     }
   }
   if (fontFace.familyName.empty() || fontFace.sources.empty()) {
@@ -520,6 +531,10 @@ std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
   return BuildFontFace(declarations);
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 bool WarnUnsupportedAtRule(const AtRule& atRule, ParseWarningSink& warningSink) {
   const char* reason;
   if (atRule.name.equalsLowercase("media")) {
@@ -562,6 +577,10 @@ std::span<const ComponentValue> TrimLayerWhitespace(std::span<const ComponentVal
   }
   return values;
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 bool IsLayerIdent(const RcString& name) {
   constexpr std::array<std::string_view, 5> kReserved{"initial", "inherit", "unset", "revert",
@@ -610,6 +629,10 @@ std::optional<std::vector<LayerPath>> ParseLayerNames(std::span<const ComponentV
     values = values.subspan(length + 1);
   }
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
 
 /// The URL of an `@import` target: a `<string>`, an unquoted `url()` token, or `url(<string>)`.
 std::optional<RcString> ImportTargetUrl(const ComponentValue& value) {
@@ -779,6 +802,10 @@ struct StylesheetParseState {
   bool sawImport = false;
 };
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
+
 void RecordLayerEvent(StylesheetParseState& state, LayerEvent event) {
   if (state.layers.events.empty()) {
     // Plain import-only sheets can keep the order implicit in imports(). Once a layer needs
@@ -853,6 +880,10 @@ void WarnLayerLimit(const AtRule& atRule, ParseWarningSink& warningSink) {
   });
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
                       ParseWarningSink& warningSink) {
   state.securityStats.hasImportRule = true;
@@ -887,6 +918,10 @@ void HandleImportRule(const AtRule& atRule, StylesheetParseState& state,
   state.imports.push_back(ImportRule{
       .url = std::move(parsed.url), .sourceOffset = atRule.sourceOffset, .layer = layer});
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 SimpleBlock* CurlyBlock(ComponentValue& value) {
   auto* block = std::get_if<SimpleBlock>(&value.value);
@@ -924,8 +959,16 @@ std::optional<QualifiedRule> TakeNestedQualifiedRule(std::span<ComponentValue> v
   return std::nullopt;
 }
 
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#endif
+
 void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state,
                 ParseWarningSink& warningSink, LayerId parent);
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute push(__attribute__((minsize)), apply_to = function)
+#endif
 
 void HandleLayerBody(std::string_view source, SimpleBlock& block, StylesheetParseState& state,
                      ParseWarningSink& warningSink, LayerId parent) {
@@ -1048,6 +1091,11 @@ void HandleRule(std::string_view source, Rule& rule, StylesheetParseState& state
     HandleAtRule(source, *atRule, state, warningSink, parent);
   }
 }
+
+#if defined(DONNER_APPLE_LAYER_PARSER_MINSIZE)
+#pragma clang attribute pop
+#undef DONNER_APPLE_LAYER_PARSER_MINSIZE
+#endif
 
 }  // namespace
 

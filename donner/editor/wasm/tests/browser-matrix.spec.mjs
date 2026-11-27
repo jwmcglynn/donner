@@ -557,6 +557,24 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   ]
     .map(([, tag]) => tag).sort();
   assert.deepEqual(watchdogTags, ["exclusive", "manual", "no-sandbox", "perf"]);
+
+  const ciDarwin = readFileSync(path.join(repositoryRoot, "build_defs/ci_darwin.bzl"), "utf8");
+  for (const project of ["firefox", "firefox-dpr1"]) {
+    assert.ok(
+      ciDarwin.includes(`"${responsivenessPerfTarget(project)}",`),
+      `${project} responsiveness perf needs a remote Darwin qualification wrapper`,
+    );
+  }
+  assert.match(
+    ciDarwin,
+    /if name in special\.get\("remote_performance", \[\]\):[\s\S]*?_variant\(ci, name, source, "desktop", True, True, "ci_darwin_perf_", \["external", "no-cache"\], \["exclusive"\]\)/,
+    "remote Firefox perf wrappers must require a desktop GPU runner without inheriting the local-only exclusive tag",
+  );
+  assert.match(
+    ciDarwin,
+    /if "manual" in tags[\s\S]*?continue/,
+    "manual performance roots must not also enter the ordinary Darwin variant set",
+  );
   // Every editor lane serves the one production browser-selected package. The standalone
   // renderer has its own page and package, verified separately below.
   const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
@@ -2040,8 +2058,9 @@ async function sampleScriptedDrag({
   frameEveryMs = 50,
   releasePoint,
   releaseZoom = 1.5,
+  presentationOnlyHeldBurst = false,
 }) {
-  const { streamDragInputs } = await import("./drag-input-stream.mjs");
+  const { kPresentationSamplePollMs, streamDragInputs } = await import("./drag-input-stream.mjs");
   let now = 1000;
   let nextTimer = 0;
   const timers = [];
@@ -2063,9 +2082,17 @@ async function sampleScriptedDrag({
     __donnerInteractionStats: { pointerX: 0, pointerY: 0, dragging: false, selectedCount: 1 },
     __donnerViewportStats: { zoom: 1.5 },
   };
-  const complete = (pointer, mouseDown, inputRepresented, viewportZoom = 1.5) => {
-    const loop = page.__donnerFrameLoopStats;
-    page.__donnerFrameLoopStats = { renderedFrames: loop.renderedFrames + 1, lastFrameAtMs: now };
+  const complete = (
+    pointer,
+    mouseDown,
+    inputRepresented,
+    viewportZoom = 1.5,
+    advancesFrameLoop = true,
+  ) => {
+    if (advancesFrameLoop) {
+      const loop = page.__donnerFrameLoopStats;
+      page.__donnerFrameLoopStats = { renderedFrames: loop.renderedFrames + 1, lastFrameAtMs: now };
+    }
     page.__donnerPresentationQueueStats = {
       completedSerial: page.__donnerPresentationQueueStats.completedSerial + 1,
       completedAtMs: now,
@@ -2095,6 +2122,13 @@ async function sampleScriptedDrag({
       if (event.type === "mousedown") {
         held = true;
         schedule(laggingFrame, frameEveryMs);
+        if (presentationOnlyHeldBurst) {
+          schedule(() => complete({ x: pointer.x + 1, y: pointer.y }, true, true, 1.5, false), 99);
+          schedule(
+            () => complete({ x: pointer.x + 1, y: pointer.y + 1 }, true, true, 1.5, false),
+            107,
+          );
+        }
       } else if (event.type === "mouseup") {
         held = false;
         if (releaseAfterMs !== null) {
@@ -2116,6 +2150,10 @@ async function sampleScriptedDrag({
     },
     performance: { now: () => now },
     setTimeout: schedule,
+    clearTimeout: (id) => {
+      const index = timers.findIndex((timer) => timer.id === id);
+      if (index >= 0) timers.splice(index, 1);
+    },
     requestAnimationFrame: (fn) => schedule(() => fn(now), 16),
     cancelAnimationFrame: (id) => {
       const index = timers.findIndex((timer) => timer.id === id);
@@ -2134,6 +2172,7 @@ async function sampleScriptedDrag({
     const stream = streamDragInputs({
       start: { x: 400, y: 300 },
       direction: 0.25,
+      presentationSamplePollMs: kPresentationSamplePollMs,
       releaseFrameTimeoutMs,
     }).finally(() => {
       settled = true;
@@ -2155,6 +2194,104 @@ async function sampleScriptedDrag({
     }
   }
 }
+
+test("the drag sampler retains presentation completions between animation frames", async () => {
+  const metrics = await import("./drag-input-stream.mjs");
+  assert.doesNotMatch(
+    String(metrics.streamDragInputs),
+    /\bkPresentationSamplePollMs\b/,
+    "the serialized in-page sampler must read its interval only from the Playwright argument",
+  );
+  const stream = await sampleScriptedDrag({
+    releaseFrameTimeoutMs: metrics.kReleaseFrameTimeoutMs,
+    releaseAfterMs: 0,
+    frameEveryMs: 1000,
+    presentationOnlyHeldBurst: true,
+  });
+  const completed = metrics.completedDragFrames(stream, 1);
+  assert.equal(
+    metrics.heldDragPositionCount(completed),
+    2,
+    "both held presentations published between rAF callbacks remain measurable",
+  );
+});
+
+test("completed drag frames reject a matching coordinate dispatched in the future", async () => {
+  const metrics = await import("./drag-input-stream.mjs");
+  const presentation = {
+    completedSerial: 2,
+    completedAtMs: 150,
+    inputRepresented: true,
+    mouseDown: true,
+    pointerX: 2,
+    pointerY: 3,
+    viewportZoom: 1,
+  };
+  const stream = {
+    startedAtMs: 100,
+    pressDispatchedAtMs: 110,
+    finishedAtMs: 250,
+    dispatchTimes: [200],
+    dispatchPoints: [{ x: 2, y: 3 }],
+    frames: [{ frame: 1, atMs: 150, presentation }],
+    start: { x: 0, y: 0 },
+    end: { x: 2, y: 3 },
+    releasedAtMs: 240,
+    releaseFrame: null,
+  };
+  assert.deepEqual(
+    metrics.completedDragFrames(stream, 1),
+    [],
+    "a coordinate does not count before the matching input was dispatched",
+  );
+  stream.dispatchTimes[0] = 140;
+  presentation.pointerX += 1e-9;
+  assert.deepEqual(metrics.completedDragFrames(stream, 1), [stream.frames[0]]);
+});
+
+test("held drag motion includes its dispatched press and a later represented move", async () => {
+  const metrics = await import("./drag-input-stream.mjs");
+  const presentation = (serial, point) => ({
+    frame: serial,
+    atMs: serial * 10,
+    presentation: {
+      completedSerial: serial,
+      completedAtMs: serial * 10,
+      inputRepresented: true,
+      mouseDown: true,
+      pointerX: point.x,
+      pointerY: point.y,
+      viewportZoom: 1,
+    },
+  });
+  const stream = {
+    startedAtMs: 10,
+    pressDispatchedAtMs: 15,
+    finishedAtMs: 40,
+    dispatchTimes: [20],
+    dispatchPoints: [{ x: 12, y: 13 }],
+    frames: [presentation(2, { x: 10, y: 11 }), presentation(3, { x: 12, y: 13 })],
+    start: { x: 10, y: 11 },
+    end: { x: 12, y: 13 },
+    releasedAtMs: 40,
+    releaseFrame: null,
+  };
+  const completed = metrics.completedDragFrames(stream, 1);
+  const pressOnly = metrics.completedDragFrames({
+    ...stream,
+    dispatchTimes: [],
+    dispatchPoints: [],
+    frames: stream.frames.slice(0, 1),
+  }, 1);
+  assert.equal(metrics.heldDragPositionCount(pressOnly), 1, "a press without displayed motion fails");
+  const latePress = metrics.completedDragFrames({ ...stream, pressDispatchedAtMs: 21 }, 1);
+  assert.equal(
+    metrics.heldDragPositionCount(latePress),
+    1,
+    "a press stamped after its presented completion cannot establish motion",
+  );
+  assert.equal(metrics.heldDragPositionCount(completed), 2);
+});
 
 test("the drag sampler observes the drag until the one release stall guard", async () => {
   const stream = await import("./drag-input-stream.mjs");

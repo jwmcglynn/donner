@@ -802,6 +802,8 @@ public:
   /// Enable or disable active autocomplete requests.
   /// @param value Whether autocomplete is active.
   void setActiveAutocomplete(bool value) { core_.setActiveAutocomplete(value); }
+  /// Report whether the structured autocomplete popup is currently visible.
+  bool isAutocompleteOpen() const { return autocompleteOpened_; }
   /// Show or hide changed-line markers in the scrollbar.
   /// @param value Whether markers are shown.
   void setScrollbarMarkers(bool value) { core_.setScrollbarMarkers(value); }

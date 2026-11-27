@@ -287,6 +287,44 @@ TEST_F(StyleSystemTest, SelectedFallbackWhitespaceIsIgnoredAtDeclarationBoundari
   EXPECT_THAT(target->getComputedStyle().opacity.get(), testing::Optional(Eq(0.5)));
 }
 
+// Adapted from CSS Variables WPT var-fallback-braces.html for SVG computed styles.
+TEST_F(StyleSystemTest, BracedVariableFallbacksUnwrapAndRejectTrailingTokens) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        #tight { fill:var(--missing,{rgb(1,2,3)}); }
+        #inside { fill:var(--missing, { rgb(1,2,3) }); }
+        #outside { fill:var(--missing, {rgb(1,2,3)} ); }
+        #invalid { fill:blue; fill:var(--missing,{rgb(1,2,3)} rgb(4,5,6)); }
+        #family { font-family:var(--missing,{Arial, sans-serif}); }
+        #invalid-family { font-family:monospace; font-family:var(--missing,{Arial}, sans-serif); }
+      </style>
+      <rect id="tight"/><rect id="inside"/><rect id="outside"/><rect id="invalid"/>
+      <text id="family"/><text id="invalid-family"/>
+    </svg>)svg");
+  const auto color = [&](std::string_view selector, css::RGBA expected) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    EXPECT_THAT(element->getComputedStyle().fill.get(),
+                testing::Optional(Eq(PaintServer::Solid(css::Color(expected)))));
+  };
+  constexpr auto ink = css::RGBA::RGB(1, 2, 3);
+  color("#tight", ink);
+  color("#inside", ink);
+  color("#outside", ink);
+  color("#invalid", css::RGBA::RGB(0, 0, 255));
+
+  const auto family = document.querySelector("#family");
+  const auto invalidFamily = document.querySelector("#invalid-family");
+  ASSERT_THAT(family, testing::Optional(testing::_));
+  ASSERT_THAT(invalidFamily, testing::Optional(testing::_));
+  EXPECT_THAT(family->getComputedStyle().fontFamily.get(),
+              testing::Optional(ElementsAre(RcString("Arial"), RcString("sans-serif"))));
+  EXPECT_THAT(invalidFamily->getComputedStyle().fontFamily.get(),
+              testing::Optional(ElementsAre(RcString("monospace"))));
+}
+
 TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValue) {
   auto document = ParseAndComputeStyles(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" style="--bad:red">
@@ -309,6 +347,53 @@ TEST_F(StyleSystemTest, InvalidSubstitutedResourceOpacityShadowsPresentationValu
   ASSERT_THAT(floodOpacity, NotNull());
   EXPECT_EQ(stopOpacity->stopOpacity, 1.0);
   EXPECT_EQ(floodOpacity->floodOpacity, 1.0);
+}
+
+TEST_F(StyleSystemTest, DeferredTransformRetainsImportantPriorityAgainstVariables) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--offset:translate(20px)">
+      <rect id="important-concrete"
+            style="transform:translate(10px) !important;transform:var(--offset)"/>
+      <rect id="important-variable"
+            style="transform:translate(10px) !important;transform:var(--offset) !important"/>
+    </svg>)svg");
+  const auto concrete = document.querySelector("#important-concrete");
+  const auto variable = document.querySelector("#important-variable");
+  ASSERT_THAT(concrete, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  EXPECT_THAT(concrete->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(10, 0)));
+  EXPECT_THAT(variable->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(20, 0)));
+}
+
+TEST_F(StyleSystemTest, SubstitutedFilterKeepsPresentationUserUnits) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--radius:2">
+      <style>rect { filter:blur(var(--radius)); }</style>
+      <path id="direct" filter="blur(2)"/>
+      <path id="variable" filter="blur(var(--radius))"/>
+      <path id="inline" style="filter:blur(var(--radius))"/>
+      <rect id="rule"/>
+    </svg>)svg");
+  const auto direct = document.querySelector("#direct");
+  const auto variable = document.querySelector("#variable");
+  const auto inlineStyle = document.querySelector("#inline");
+  const auto rule = document.querySelector("#rule");
+  ASSERT_THAT(direct, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  ASSERT_THAT(inlineStyle, testing::Optional(testing::_));
+  ASSERT_THAT(rule, testing::Optional(testing::_));
+  const auto* directStyle = ComputedFor(*direct).properties();
+  const auto* variableStyle = ComputedFor(*variable).properties();
+  const auto* inlineProperties = ComputedFor(*inlineStyle).properties();
+  const auto* ruleStyle = ComputedFor(*rule).properties();
+  ASSERT_THAT(directStyle, NotNull());
+  ASSERT_THAT(variableStyle, NotNull());
+  ASSERT_THAT(inlineProperties, NotNull());
+  ASSERT_THAT(ruleStyle, NotNull());
+  ASSERT_THAT(directStyle->filter.get(), testing::Optional(testing::SizeIs(1)));
+  EXPECT_THAT(variableStyle->filter.get(), Eq(directStyle->filter.get()));
+  EXPECT_THAT(inlineProperties->filter.get(), testing::Optional(testing::IsEmpty()));
+  EXPECT_THAT(ruleStyle->filter.get(), testing::Optional(testing::IsEmpty()));
 }
 
 TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) {
@@ -339,6 +424,84 @@ TEST_F(StyleSystemTest, PresentationVariableEditsRetainOnlyTheCurrentAttribute) 
   fill(css::RGBA::RGB(255, 0, 0));
   target->removeAttribute("fill");
   fill(css::RGBA::RGB(0, 128, 0));
+}
+
+TEST_F(StyleSystemTest, PresentationStrokeWidthUsesInheritedCustomProperty) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--inherited-width: 5px">
+      <g><rect id="target" stroke-width="var(--inherited-width)"/></g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto* properties = ComputedFor(*target).properties();
+  ASSERT_THAT(properties, NotNull());
+  EXPECT_THAT(properties->strokeWidth.get(), testing::Optional(Eq(Lengthd(5, Lengthd::Unit::Px))));
+}
+
+TEST_F(StyleSystemTest, HiddenPresentationVariablesTrackReplacementAndRemoval) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" style="--ink:red;--next:green;fill:blue"/>
+    </svg>)svg");
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto expectFill = [&](css::RGBA color) {
+    EXPECT_THAT(target->getComputedStyle().fill.get(),
+                testing::Optional(Eq(PaintServer::Solid(css::Color(color)))));
+  };
+
+  target->setAttribute("fill", "var(--ink)");
+  target->setAttribute("fill", "var(--next)");
+  expectFill(css::RGBA::RGB(0, 0, 255));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(0, 128, 0));
+
+  target->setStyle("--ink:red;--next:green;fill:blue");
+  target->setAttribute("fill", "var(--ink)");
+  target->removeAttribute("fill");
+  expectFill(css::RGBA::RGB(0, 0, 255));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(0, 0, 0));
+
+  target->setStyle("--ink:red;--next:green;fill:var(--next)");
+  target->setAttribute("fill", "var(--ink)");
+  expectFill(css::RGBA::RGB(0, 128, 0));
+  target->setStyle("--ink:red;--next:green");
+  expectFill(css::RGBA::RGB(255, 0, 0));
+}
+
+TEST_F(StyleSystemTest, MarkerVariablesDiscoverAndOrderTheirLonghands) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--m:url(#arrow)">
+      <path id="target" style="marker:var(--m);marker-end:url(#other)"/>
+      <path id="invalid" style="marker:url(#other);marker:var(--absent)"/>
+      <g style="marker:url(#arrow)">
+        <path id="inherited" style="marker:initial;marker:inherit"/>
+      </g>
+    </svg>)svg");
+  const auto target = document.querySelector("#target");
+  const auto invalid = document.querySelector("#invalid");
+  const auto inherited = document.querySelector("#inherited");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(invalid, testing::Optional(testing::_));
+  ASSERT_THAT(inherited, testing::Optional(testing::_));
+
+  const Reference arrow(RcString("#arrow"));
+  const Reference other(RcString("#other"));
+  const auto& property = target->getComputedStyle();
+  EXPECT_THAT(property.markerStart.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(property.markerMid.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(property.markerEnd.get(), testing::Optional(Eq(other)));
+
+  const auto& invalidProperty = invalid->getComputedStyle();
+  EXPECT_THAT(invalidProperty.markerStart.get(), Eq(std::nullopt));
+  EXPECT_THAT(invalidProperty.markerMid.get(), Eq(std::nullopt));
+  EXPECT_THAT(invalidProperty.markerEnd.get(), Eq(std::nullopt));
+
+  const auto& inheritedProperty = inherited->getComputedStyle();
+  EXPECT_THAT(inheritedProperty.markerStart.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(inheritedProperty.markerMid.get(), testing::Optional(Eq(arrow)));
+  EXPECT_THAT(inheritedProperty.markerEnd.get(), testing::Optional(Eq(arrow)));
 }
 
 TEST_F(StyleSystemTest, InlineVariableEditsKeepTheWinningPriorityInSource) {
@@ -378,6 +541,88 @@ TEST_F(StyleSystemTest, ResourceColorVariablesKeepAuthoredPresentationOrigins) {
   color(css::RGBA::RGB(0, 0, 255));
   stop->setStyle("");
   color(css::RGBA::RGB(255, 0, 0));
+}
+
+TEST_F(StyleSystemTest, SubstitutedRectangleGeometryKeepsPresentationUnits) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--wide:18">
+      <style>.stylesheet { width: var(--wide); }</style>
+      <rect id="direct" width="18" height="10"/>
+      <rect id="variable" width="var(--wide)" height="10"/>
+      <rect id="strict" class="stylesheet" height="10"/>
+    </svg>)svg");
+  const auto direct = document.querySelector("#direct");
+  auto variable = document.querySelector("#variable");
+  const auto strict = document.querySelector("#strict");
+  ASSERT_THAT(direct, testing::Optional(testing::_));
+  ASSERT_THAT(variable, testing::Optional(testing::_));
+  ASSERT_THAT(strict, testing::Optional(testing::_));
+  const auto directRect = direct->cast<SVGRectElement>();
+  const auto variableRect = variable->cast<SVGRectElement>();
+  ASSERT_EQ(directRect.computedWidth().value, 18.0);
+  EXPECT_EQ(variableRect.computedWidth().value, directRect.computedWidth().value);
+  EXPECT_EQ(strict->cast<SVGRectElement>().computedWidth().value, 0.0);
+
+  variable->setAttribute("width", "6");
+  EXPECT_EQ(variableRect.computedWidth().value, 6.0);
+  variable->setAttribute("width", "var(--wide)");
+  EXPECT_EQ(variableRect.computedWidth().value, 18.0);
+  variable->removeAttribute("width");
+  EXPECT_EQ(variableRect.computedWidth().value, 0.0);
+}
+
+TEST_F(StyleSystemTest, SubstitutedPresentationTransformsUseSvgGrammar) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--x:18;--pair:8 5;--pivot:30 7 2">
+      <style>.strict { transform:translate(var(--x)); }</style>
+      <rect id="literal-unit" transform="translate(18)"/>
+      <rect id="variable-unit" transform="translate(var(--x))"/>
+      <rect id="literal-combined" transform="translate(8 5),rotate(30 7 2)"/>
+      <rect id="variable-combined" transform="translate(var(--pair)),rotate(var(--pivot))"/>
+      <rect id="strict" class="strict"/>
+    </svg>)svg");
+
+  const auto directUnit = document.querySelector("#literal-unit");
+  const auto variableUnit = document.querySelector("#variable-unit");
+  const auto directCombined = document.querySelector("#literal-combined");
+  const auto variableCombined = document.querySelector("#variable-combined");
+  const auto strict = document.querySelector("#strict");
+  ASSERT_THAT(directUnit, testing::Optional(testing::_));
+  ASSERT_THAT(variableUnit, testing::Optional(testing::_));
+  ASSERT_THAT(directCombined, testing::Optional(testing::_));
+  ASSERT_THAT(variableCombined, testing::Optional(testing::_));
+  ASSERT_THAT(strict, testing::Optional(testing::_));
+  EXPECT_THAT(directUnit->cast<SVGRectElement>().transform(), Eq(Transform2d::Translate(18, 0)));
+  EXPECT_THAT(variableUnit->cast<SVGRectElement>().transform(),
+              Eq(directUnit->cast<SVGRectElement>().transform()));
+  EXPECT_THAT(variableCombined->cast<SVGRectElement>().transform(),
+              Eq(directCombined->cast<SVGRectElement>().transform()));
+  EXPECT_THAT(strict->cast<SVGRectElement>().transform(), Eq(Transform2d()));
+}
+
+TEST_F(StyleSystemTest, TransformVariableEditsRefreshImmediateGeometry) {
+  auto document = ParseAndComputeStyles(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" style="--position:translate(20px)">
+      <rect id="target" width="10" height="10" transform="var(--position)"/>
+    </svg>)svg");
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto rectangle = target->cast<SVGRectElement>();
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->removeAttribute("transform");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d()));
+
+  target->setAttribute("transform", "translate(7)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(7, 0)));
+  target->setAttribute("transform", "var(--position)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->setAttribute("transform", "translate(9)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(9, 0)));
+
+  target->setStyle("transform:var(--position)");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(20, 0)));
+  target->setStyle("");
+  EXPECT_THAT(rectangle.transform(), Eq(Transform2d::Translate(9, 0)));
 }
 
 TEST_F(StyleSystemTest, InvalidSubstitutedWidthDoesNotExposeAnEarlierValue) {

@@ -3211,6 +3211,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   window.setPresentationFrameIdentity(/*frameId=*/999, oldPresentation->captureId,
                                       oldPresentation->documentGeneration,
                                       oldPresentation->frameVersion,
+                                      /*pointerX=*/0.0, /*pointerY=*/0.0,
+                                      /*mouseDown=*/false,
                                       /*inputRepresented=*/true, /*viewportZoom=*/1.0);
   window.beginFrame();
   window.endFrame();
@@ -10636,6 +10638,177 @@ TEST(EditorShellTest, FillAndStrokeForegroundWidgetScreenshots) {
   ASSERT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
   WriteEyedropperScreenshot(CapturePaintWidgetFrame(window, shell, kWidgetCursor),
                             "fill_stroke_stroke_active.png");
+}
+
+namespace {
+
+ImGuiWindow* ActiveSourceCompletionWindow() {
+  for (ImGuiWindow* item : ImGui::GetCurrentContext()->Windows) {
+    if (item->Active && !item->Hidden &&
+        std::string_view(item->Name).starts_with("TextEditorAutocomplete##")) {
+      return item;
+    }
+  }
+  return nullptr;
+}
+
+svg::RendererBitmap CropSuggestionWindow(const svg::RendererBitmap& image, ImRect bounds,
+                                         ImVec2 displaySize) {
+  const auto pixel = [](float coordinate, float display, int extent) {
+    return std::clamp(static_cast<int>(coordinate * extent / display), 0, extent);
+  };
+  const Vector2i origin(pixel(bounds.Min.x, displaySize.x, image.dimensions.x),
+                        pixel(bounds.Min.y, displaySize.y, image.dimensions.y));
+  const Vector2i limit(pixel(bounds.Max.x, displaySize.x, image.dimensions.x),
+                       pixel(bounds.Max.y, displaySize.y, image.dimensions.y));
+  return tests::CropBitmap(image, origin, limit - origin);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, SvgAndCssSourcePaletteScreenshot) {
+  constexpr std::string_view kSource = R"SVG(<svg xmlns="http://www.w3.org/2000/svg"
+     class="aurora" viewBox="0 0 480 240">
+  <style>
+    @import url("palette.css") layer(base);
+
+    .aurora {
+      --glow: #76e6c5;
+      --edge: #ffab85;
+    }
+
+    .ribbon {
+      fill: url(#spectrum);
+      stroke: var(--edge);
+      stroke-width: 3px;
+      stroke-dasharray: 8px 4px;
+      stroke-dashoffset: 2px;
+      stroke-dashoffset: calc(12px - 10px);
+    }
+  </style>
+
+  <defs>
+    <linearGradient id="spectrum" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7068df"/>
+      <stop offset="100%" stop-color="var(--glow)"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(20 16)">
+    <path class="ribbon" d="M0 116 Q96 12 210 80 T440 50 L440 170 Q180 92 0 180 Z"/>
+  </g>
+</svg>)SVG";
+  constexpr int kWidth = 760;
+  constexpr int kHeight = 475;
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "SVG and CSS source palette",
+      .initialWidth = kWidth,
+      .initialHeight = kHeight,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  TextEditor& editor = EditorShellTestAccess::Source(shell);
+  editor.setText(kSource);
+  editor.setShowWhitespaces(false);
+  editor.setCursorPosition(Coordinates(0, 0));
+  const auto paint = [&] {
+    window.beginFrame();
+    EditorShellTestAccess::RenderSourcePane(shell, 0, kHeight, kWidth, window.editorFonts().code);
+  };
+  paint();
+  window.endFrame();
+  paint();
+  const auto pixels = window.endFrameAndReadPixels();
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_THAT(editor.getText(), testing::Eq(kSource));
+  WriteEyedropperScreenshot(pixels, "svg_css_source_palette.png");
+}
+
+TEST(EditorShellTest, CssSourceColoringAndCompletionScreenshot) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "CSS source coloring and completion screenshot",
+      .initialWidth = 900,
+      .initialHeight = 640,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  ImGui::GetIO().ConfigInputTrickleEventQueue = false;
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  constexpr std::string_view kCssLine = ".card { fill: n }";
+  constexpr std::string_view kSource = R"(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .card { fill: n }
+  </style>
+  <rect class="card" width="80" height="60" style="stroke: #222"/>
+</svg>)";
+  source.setText(kSource);
+  source.setCursorPosition(
+      Coordinates(2, static_cast<int>(kCssLine.find("fill: n") + 7 + 4)));  // Four-space indent.
+  source.setActiveAutocomplete(true);
+
+  const auto drawSource = [&] {
+    if (ImGuiWindow* sourceWindow = FindSourceEditorWindow()) {
+      ImGui::FocusWindow(sourceWindow);
+    }
+    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 640.0f, 680.0f, window.editorFonts().code);
+  };
+  window.beginFrame();
+  drawSource();
+  window.endFrame();
+  ASSERT_NE(FindSourceEditorWindow(), nullptr);
+  ImGui::FocusWindow(FindSourceEditorWindow());
+  ImGui::GetIO().AddInputCharacter('o');
+  window.beginFrame();
+  drawSource();
+  window.endFrame();
+  window.beginFrame();
+  drawSource();
+  ASSERT_TRUE(source.isAutocompleteOpen());
+  window.endFrame();
+  window.beginFrame();
+  drawSource();
+  const ImGuiWindow* popup = ActiveSourceCompletionWindow();
+  ASSERT_THAT(popup, testing::NotNull());
+  const ImRect bounds = popup->Rect();
+  const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+  const svg::RendererBitmap screenshot = window.endFrameAndReadPixels();
+  ASSERT_FALSE(screenshot.empty());
+
+  // A reference frame explicitly paints the suggestion above the editor. If normal focus
+  // ordering hides it, the canonical pixel comparator records the actual, expected and diff PNGs.
+  window.beginFrame();
+  drawSource();
+  ImGuiWindow* referenceWindow = ActiveSourceCompletionWindow();
+  ASSERT_THAT(referenceWindow, testing::NotNull());
+  ImGui::BringWindowToDisplayFront(referenceWindow);
+  const auto reference = window.endFrameAndReadPixels();
+  ASSERT_THAT(reference.dimensions, testing::Eq(screenshot.dimensions));
+  tests::CompareBitmapToBitmap(CropSuggestionWindow(screenshot, bounds, displaySize),
+                               CropSuggestionWindow(reference, bounds, displaySize),
+                               "css_source_completion_visible", tests::PixelmatchIdentityParams());
+
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+  window.beginFrame();
+  drawSource();
+  window.endFrame();
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+  window.beginFrame();
+  drawSource();
+  ASSERT_FALSE(source.isAutocompleteOpen());
+  window.endFrame();
+  EXPECT_THAT(source.getText(), testing::HasSubstr("fill: no"));
+  WriteEyedropperScreenshot(screenshot, "css_source_coloring_completion.png");
 }
 
 TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewText) {

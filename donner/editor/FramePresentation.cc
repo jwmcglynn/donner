@@ -460,6 +460,7 @@ FramePresentationBuildResult FramePresentation::Build(
 void FramePresentation::initialize(const FramePresentationInput& input, bool useOverview) {
   identity_ = rasterCapture_->identity();
   frameId_ = input.frameId;
+  inputIdentity_ = input.inputIdentity;
   viewport_ = input.viewport;
   paneClipRect_ = input.paneClipRect;
   documentClipRect_ = PresentedImageClipRect(input.paneClipRect, input.viewport.imageScreenRect());
@@ -512,6 +513,13 @@ void FramePresentation::applyPointerIntent(const FramePresentationInput& input) 
         SetOverride(overrides_, pose);
       }
     }
+  }
+  resolveInputIdentity(input);
+}
+
+void FramePresentation::resolveInputIdentity(const FramePresentationInput& input) {
+  if (!followsPointer_ && input.representedResourceInputIdentity.has_value()) {
+    inputIdentity_ = *input.representedResourceInputIdentity;
   }
 }
 

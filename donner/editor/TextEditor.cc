@@ -3597,8 +3597,8 @@ void renderFunctionTooltip(const std::string& declaration, const ImVec2& positio
   pushEditorFontIfNeeded(font);
 }
 
-void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
-                        int selectedIndex, const ImVec2& position, float uiScale) {
+std::optional<int> renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
+                                      int selectedIndex, const ImVec2& position, float uiScale) {
   const float popupWidth = 150.0f * uiScale;
   const float popupHeight = 100.0f * uiScale;
 
@@ -3611,19 +3611,24 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
   const std::string windowName = popupWindowName("Autocomplete");
   if (!ImGui::Begin(windowName.c_str(), nullptr, flags)) {
     ImGui::End();
-    return;
+    return std::nullopt;
   }
 
+  std::optional<int> clicked;
   for (int i = 0; i < suggestions.size(); i++) {
     const bool isSelected = (i == selectedIndex);
     // TODO: Make a better way to have a null-terminated RcString
     const std::string suggestionStr = suggestions[i].first.str();
-    if (ImGui::Selectable(suggestionStr.c_str(), isSelected) && isSelected) {
-      ImGui::SetScrollHereY();
+    if (ImGui::Selectable(suggestionStr.c_str(), isSelected)) {
+      clicked = i;
     }
   }
 
+  auto* popup = ImGui::GetCurrentWindow();
   ImGui::End();
+  // Keep keyboard focus in the source pane while painting its suggestion window above it.
+  ImGui::BringWindowToDisplayFront(popup);
+  return clicked;
 }
 
 }  // namespace
@@ -3665,11 +3670,16 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
 
     ImFont* font = popPushedEditorFont();
 
-    renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
+    const auto clicked =
+        renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
 
     pushEditorFontIfNeeded(font);
 
-    ImGui::SetWindowFocus();
+    if (clicked) {
+      autocompleteIndex_ = *clicked;
+      autocompleteSelect();
+      ImGui::SetWindowFocus();
+    }
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
       autocompleteOpened_ = false;
     }
@@ -4586,20 +4596,18 @@ void TextEditor::redo(int steps) {
 }
 
 const TextEditor::Palette& TextEditor::getDarkPalette() {
-  // Coordinated Graphite syntax palette. It keeps the XML source pane neutral
-  // around artwork, then uses teal, amber, green, and coral only for semantic
-  // distinction instead of the legacy saturated primary-color ramp.
+  // Graphite surfaces stay neutral; syntax hues distinguish markup and CSS roles.
   static constexpr Palette kPalette = {{
       0xffb5b0aa,  // Default #aab0b5
-      0xffb7d135,  // Keyword #35d1b7
-      0xffaede78,  // Number #78deae
-      0xff74b7f0,  // String #f0b774
+      0xff9399ff,  // Keyword #ff9993
+      0xff83b3ff,  // Number #ffb383
+      0xffa5dda8,  // String #a8dda5
       0xff8dc9f2,  // Char literal #f2c98d
-      0xffdcd8d6,  // Punctuation #d6d8dc
+      0xffc0aa9b,  // Punctuation #9baac0
       0xffc2bcb5,  // Identifier #b5bcc2
-      0xffc7db6d,  // Known identifier #6ddbc7
-      0xff797169,  // Comment (single line) #697179
-      0xff716a63,  // Comment (multi line) #636a71
+      0xffffcc8b,  // Known identifier #8bccff
+      0xffaf9f93,  // Comment (single line) #939faf
+      0xffaf9f93,  // Comment (multi line) #939faf
       0xff191615,  // Background #151619
       0xfff4f2f1,  // Cursor #f1f2f4
       0x8031c6b3,  // Selection, Signal Teal at 50% alpha
@@ -4619,7 +4627,12 @@ const TextEditor::Palette& TextEditor::getDarkPalette() {
       0xffc2bcb5,  // UniformType
       0xffc2bcb5,  // GlobalVariable
       0xffc2bcb5,  // LocalVariable
-      0xffb5ada8   // FunctionArgument #a8adb5
+      0xffb5ada8,  // FunctionArgument #a8adb5
+      0xffffa6c8,  // CssAtRule #c8a6ff
+      0xff82cff4,  // CssSelector #f4cf82
+      0xffcd9cff,  // CssCustomProperty #ff9ccd
+      0xffd3dc6c,  // CssFunction #6cdcd3
+      0xffffacb7,  // CssColor #b7acff
   }};
 
   return kPalette;

@@ -306,6 +306,8 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
                                .version = editor.document().currentFrameVersion(),
                                .geometryRevision = editor.document().nonTransformRevision(),
                                .fontResourceRevision = editor.document().fontResourceRevision()},
+      .currentDocumentPoint = documentPoint,
+      .committedDocumentPoint = documentPoint,
   };
   return true;
 }
@@ -418,6 +420,8 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                     .version = editor.document().currentFrameVersion(),
                     .geometryRevision = editor.document().nonTransformRevision(),
                     .fontResourceRevision = editor.document().fontResourceRevision()},
+            .currentDocumentPoint = documentPoint,
+            .committedDocumentPoint = documentPoint,
         };
         return;
       }
@@ -573,6 +577,8 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                                .version = editor.document().currentFrameVersion(),
                                .geometryRevision = editor.document().nonTransformRevision(),
                                .fontResourceRevision = editor.document().fontResourceRevision()},
+      .currentDocumentPoint = documentPoint,
+      .committedDocumentPoint = documentPoint,
   };
 }
 
@@ -673,6 +679,7 @@ void SelectTool::refreshCommittedDragPose(const EditorApp& editor) {
   if (!editor.document().hasPendingMutations() ||
       documentFrameVersion != dragState_->committedDocumentFrameVersion) {
     dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
+    dragState_->committedDocumentPoint = dragState_->currentDocumentPoint;
     dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
     dragState_->committedDocumentFrameVersion = documentFrameVersion;
   }
@@ -728,6 +735,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   const bool unchangedPose = dragState_->hasMoved && dragState_->currentDocumentFromStartDocument ==
                                                          *documentFromStartDocument;
   dragState_->currentDocumentDelta = deltaDoc;
+  dragState_->currentDocumentPoint = documentPoint;
   dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
   dragState_->primary.currentTransform = parentFromEntityTransforms->primary;
   dragState_->hasMoved = true;
@@ -891,6 +899,7 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
       .entity = dragState_->primary.entity,
       .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
+      .pointerDocumentPoint = dragState_->currentDocumentPoint,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation,
       .contentIdentity = dragState_->contentIdentity,
@@ -920,6 +929,7 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
   }
 
   preview->translation = dragState_->committedDocumentDelta;
+  preview->pointerDocumentPoint = dragState_->committedDocumentPoint;
   preview->documentFromCachedDocument = dragState_->committedDocumentFromStartDocument;
   preview->poses.clear();
   preview->poses.push_back(

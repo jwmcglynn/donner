@@ -13,6 +13,7 @@ load("//build_defs:variant_neutral_tests.bzl", "variant_neutral_test_suite")
 exports_files(
     ["ci_darwin.bzl", "ci_metal.bzl"],
     visibility = [
+        "//donner/editor/wasm/tests:__pkg__",
         "//tools:__pkg__",
         "//tools/ci:__pkg__",
     ],
