@@ -46,15 +46,11 @@ struct HeldFrame {
 /// construction and destruction are absent too: they ride along with the next round trip, and the
 /// 10 still held after a frame's last round trip go in one more batch when the worker parks.
 constexpr HeldFrame kHeldFrames[] = {
-    // The first held frame creates five resources the later ones take from the pool: a uniform
-    // arena buffer for the layer tile draws (`RendererGeode::drawTextureSnapshot`), a batch
-    // uniform for the tile's target size, and a clip mask, a mask capture and a mask content
-    // texture of the tile's size, which no earlier frame used. Each held frame also creates two
-    // render targets and the views its passes need. Owned blit textures reuse their default
-    // source views, avoiding repeated creation and deferred destruction of transient views.
-    {12.0, {.resourceCreation = 24, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {24.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
-    {36.0, {.resourceCreation = 19, .resourceSharing = 2, .commandBatch = 6}, 10},
+    // Disjoint clip paths need no mask texture. The first crop also lies entirely inside the
+    // owner's opaque mask. A later crop first allocates the mask resources it still needs.
+    {12.0, {.resourceCreation = 12, .resourceSharing = 2, .commandBatch = 4}, 10},
+    {24.0, {.resourceCreation = 16, .resourceSharing = 2, .commandBatch = 6}, 10},
+    {36.0, {.resourceCreation = 14, .resourceSharing = 2, .commandBatch = 6}, 10},
 };
 
 TEST(BrowserOwnerRoundTripTest, MaskedChildHeldDragFrameMatchesTheRecordedBaseline) {

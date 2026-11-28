@@ -3007,7 +3007,10 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
 
   renderer_.beginFrame(viewport);
   syncFilterPreparationStats();
+  allowDamageMaskElisionInRange_ = damageMaskElisionEnabled_ && viewport.devicePixelRatio == 1.0 &&
+                                   renderer_.supportsTextureSnapshotCompositing();
   const bool completed = drawPreparedEntityRange(registry, firstEntity, lastEntity, shouldCancel);
+  allowDamageMaskElisionInRange_ = false;
   renderer_.endFrame();
   fontRenderScope.finish(completed);
   surfaceFromCanvasTransform_ = Transform2d();
@@ -3242,7 +3245,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     int maskDepth = 0;
 
     if (instance.mask.has_value() && instance.mask->valid()) {
-      maskDepth = renderMask(view, registry, instance, *instance.mask);
+      maskDepth = renderRangeMask(view, registry, instance, style, entity, firstEntity, lastEntity);
     }
 
     ResolvedClip entityClip =
@@ -4583,6 +4586,232 @@ std::pair<MaskType, ColorInterpolation> MaskPaintOptions(EntityHandle maskHandle
   return {maskType, colorInterpolation};
 }
 
+/// Work in surface pixels. A three-pixel guard covers the analytic AA fringe, the adjacent
+/// sample footprint of the mask composite, and rounding when Geode narrows its coordinates.
+constexpr double kMaskInteriorMargin = 3.0;
+constexpr double kMaximumMaskProofCoordinate = 8192.0;
+
+bool SafeMaskProofPoint(const Vector2d& point) {
+  return std::abs(point.x) <= kMaximumMaskProofCoordinate &&
+         std::abs(point.y) <= kMaximumMaskProofCoordinate;
+}
+
+bool SafeMaskProofTransform(const Transform2d& transform) {
+  return transform.data[1] == 0 && transform.data[2] == 0 && transform.data[0] >= 0.0625 &&
+         transform.data[0] <= 16 && transform.data[3] >= 0.0625 && transform.data[3] <= 16 &&
+         SafeMaskProofPoint(transform.translation());
+}
+
+bool HullMissesMaskViewport(std::span<const Vector2d> points, const Box2d& viewport) {
+  Box2d hull = Box2d::CreateEmpty(points.front());
+  for (const Vector2d& point : points) {
+    hull.addPoint(point);
+  }
+  return hull.bottomRight.x < viewport.topLeft.x || hull.topLeft.x > viewport.bottomRight.x ||
+         hull.bottomRight.y < viewport.topLeft.y || hull.topLeft.y > viewport.bottomRight.y;
+}
+
+void AccumulateChordWinding(const Vector2d& first, const Vector2d& last, const Vector2d& point,
+                            int& winding) {
+  if ((first.y > point.y) != (last.y > point.y)) {
+    const double side =
+        (last.x - first.x) * (point.y - first.y) - (last.y - first.y) * (point.x - first.x);
+    if ((side > 0) == (last.y > first.y)) {
+      winding += (last.y > first.y) ? 1 : -1;
+    }
+  }
+}
+
+/// Both the Bézier and the replacement chord lie in their control hull. If it is
+/// disjoint from the inflated viewport, replacing it cannot change interior winding.
+bool ProveMaskSegment(std::array<Vector2d, 4> points, std::size_t count, const Box2d& viewport,
+                      int& winding) {
+  const Vector2d center = (viewport.topLeft + viewport.bottomRight) * 0.5;
+  if (HullMissesMaskViewport(std::span(points).first(count), viewport)) {
+    AccumulateChordWinding(points[0], points[count - 1], center, winding);
+    return true;
+  }
+  if (count == 2) {
+    // The line supporting this segment separates its hull from the rectangle even when
+    // their axis-aligned boxes overlap. Leave a small guard around the arithmetic.
+    const Vector2d direction = points[1] - points[0];
+    const Vector2d fromStart = center - points[0];
+    const Vector2d halfExtent = (viewport.bottomRight - viewport.topLeft) * 0.5;
+    const double distance = std::abs(direction.x * fromStart.y - direction.y * fromStart.x);
+    const double radius =
+        std::abs(direction.x) * halfExtent.y + std::abs(direction.y) * halfExtent.x;
+    if (distance <= radius + 1e-6) {
+      return false;
+    }
+    AccumulateChordWinding(points[0], points[1], center, winding);
+    return true;
+  }
+  // At most one de Casteljau split. An inconclusive hull always uses normal masking.
+  std::array<Vector2d, 4> left;
+  std::array<Vector2d, 4> right;
+  left[0] = points[0];
+  right[count - 1] = points[count - 1];
+  for (std::size_t depth = 1; depth < count; ++depth) {
+    for (std::size_t i = 0; i < count - depth; ++i) {
+      points[i] = (points[i] + points[i + 1]) * 0.5;
+    }
+    left[depth] = points[0];
+    right[count - 1 - depth] = points[count - 1 - depth];
+  }
+  if (!HullMissesMaskViewport(std::span(left).first(count), viewport) ||
+      !HullMissesMaskViewport(std::span(right).first(count), viewport)) {
+    return false;
+  }
+  AccumulateChordWinding(left[0], left[count - 1], center, winding);
+  AccumulateChordWinding(right[0], right[count - 1], center, winding);
+  return true;
+}
+
+std::size_t MaskSegmentPointCount(Path::Verb verb) {
+  switch (verb) {
+    case Path::Verb::LineTo: return 1;
+    case Path::Verb::QuadTo: return 2;
+    case Path::Verb::CurveTo: return 3;
+    default: return 0;
+  }
+}
+
+bool IsShortClosedMaskContour(const Path& path, const Transform2d& surfaceFromPath) {
+  const auto commands = path.commands();
+  return commands.size() >= 4 && commands.size() <= 64 && !path.points().empty() &&
+         commands.front().verb == Path::Verb::MoveTo && commands.front().pointIndex == 0 &&
+         commands.back().verb == Path::Verb::ClosePath && SafeMaskProofTransform(surfaceFromPath);
+}
+
+bool ReadMaskSegmentControls(std::span<const Vector2d> points, std::size_t first, std::size_t count,
+                             const Transform2d& surfaceFromPath,
+                             std::array<Vector2d, 4>& controls) {
+  if (count == 0 || first > points.size() || count > points.size() - first) {
+    return false;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    const Vector2d local = points[first + i];
+    controls[i + 1] = surfaceFromPath.transformPosition(local);
+    if (!SafeMaskProofPoint(local) || !SafeMaskProofPoint(controls[i + 1])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ClosedMaskContourCoversViewport(const Path& path, const Transform2d& surfaceFromPath,
+                                     const Box2d& viewport, FillRule fillRule) {
+  if (!IsShortClosedMaskContour(path, surfaceFromPath)) {
+    return false;
+  }
+  const auto commands = path.commands();
+  const auto points = path.points();
+  const Vector2d first = surfaceFromPath.transformPosition(points.front());
+  if (!SafeMaskProofPoint(points.front()) || !SafeMaskProofPoint(first)) {
+    return false;
+  }
+  Vector2d current = first;
+  int winding = 0;
+  for (const Path::Command& command : commands.subspan(1, commands.size() - 2)) {
+    const std::size_t count = MaskSegmentPointCount(command.verb);
+    std::array<Vector2d, 4> controls{current};
+    if (!ReadMaskSegmentControls(points, command.pointIndex, count, surfaceFromPath, controls) ||
+        !ProveMaskSegment(controls, count + 1, viewport, winding)) {
+      return false;
+    }
+    current = controls[count];
+  }
+  return ProveMaskSegment({current, first}, 2, viewport, winding) &&
+         (fillRule == FillRule::EvenOdd ? winding % 2 != 0 : winding != 0);
+}
+
+bool MaskProofNodeIsNeutral(const components::RenderingInstanceComponent& node,
+                            const components::ComputedStyleComponent* style) {
+  return style && style->properties() && HasNeutralLeafCompositing(*style) && !node.hasClipPath() &&
+         !node.clipRect && !node.mask && !node.resolvedFilter && !HasMarkers(node) &&
+         node.textSpanRoot == entt::null &&
+         !std::holds_alternative<components::PaintResolvedReference>(node.resolvedFill) &&
+         !std::holds_alternative<components::PaintResolvedReference>(node.resolvedStroke);
+}
+
+bool OpaqueMaskFill(const components::RenderingInstanceComponent& node,
+                    const components::ComputedStyleComponent& style, MaskType type) {
+  const auto* fill = std::get_if<PaintServer::Solid>(&node.resolvedFill);
+  if (!node.visible || !fill || !std::holds_alternative<PaintServer::None>(node.resolvedStroke) ||
+      style.properties()->fillOpacity.get().value() != 1.0) {
+    return false;
+  }
+  const css::RGBA color = fill->color.resolve(ResolvedCurrentColor(*style.properties()), 1.0f);
+  return type == MaskType::Alpha ? color.a == 255 : color == css::RGBA();
+}
+
+bool IsMaskProofWrapper(ElementType type) {
+  return type == ElementType::Use || type == ElementType::Mask || type == ElementType::G;
+}
+
+const components::ElementTypeComponent* KnownMaskProofType(const EntityHandle& data) {
+  return data.all_of<components::ExternalUseComponent>()
+             ? nullptr
+             : data.try_get<components::ElementTypeComponent>();
+}
+
+bool MaskSubtreeIsOpaque(RenderingInstanceView& view, Registry& registry,
+                         const components::SubtreeInfo& subtree, MaskType maskType,
+                         const Transform2d& surfaceFromMask, const Box2d& viewport) {
+  bool foundPath = false;
+  for (int depth = 0; depth < 4 && !view.done(); ++depth, view.advance()) {
+    const auto& node = view.get();
+    const EntityHandle styleHandle = node.styleHandle(registry);
+    const auto* style = styleHandle.try_get<components::ComputedStyleComponent>();
+    const EntityHandle data = node.dataHandle(registry);
+    const auto* type = KnownMaskProofType(data);
+    if (!type || !MaskProofNodeIsNeutral(node, style)) {
+      return false;
+    }
+    if (const auto* path = components::ShapeSystem::geometryHandle(styleHandle)
+                               .try_get<components::ComputedPathComponent>()) {
+      if (foundPath || !OpaqueMaskFill(node, *style, maskType) ||
+          !ClosedMaskContourCoversViewport(path->spline,
+                                           node.worldFromEntityTransform * surfaceFromMask,
+                                           viewport, style->properties()->fillRule.get().value())) {
+        return false;
+      }
+      foundPath = true;
+    } else if (!IsMaskProofWrapper(type->type())) {
+      return false;
+    }
+    if (view.currentEntity() == subtree.lastRenderedEntity) {
+      return foundPath;
+    }
+  }
+  return false;
+}
+
+const components::MaskComponent* UserSpaceMaskForProof(const components::ResolvedMask& mask) {
+  const auto* component = mask.reference.handle.try_get<components::MaskComponent>();
+  return component && component->maskUnits == MaskUnits::UserSpaceOnUse &&
+                 component->maskContentUnits == MaskContentUnits::UserSpaceOnUse
+             ? component
+             : nullptr;
+}
+
+std::optional<Box2d> DamageMaskInteriorViewport(const Vector2d& size, const Box2d& region,
+                                                const Transform2d& surfaceFromHost) {
+  if (!SafeMaskProofTransform(surfaceFromHost) || !SafeMaskProofPoint(size) || size.x <= 0 ||
+      size.y <= 0 || !SafeMaskProofPoint(region.topLeft) ||
+      !SafeMaskProofPoint(region.bottomRight)) {
+    return std::nullopt;
+  }
+  const Vector2d margin(kMaskInteriorMargin, kMaskInteriorMargin);
+  const Box2d target(Vector2d::Zero() - margin, size + margin);
+  const Vector2d regionMin = surfaceFromHost.transformPosition(region.topLeft);
+  const Vector2d regionMax = surfaceFromHost.transformPosition(region.bottomRight);
+  return regionMin.x < target.topLeft.x && regionMin.y < target.topLeft.y &&
+                 regionMax.x > target.bottomRight.x && regionMax.y > target.bottomRight.y
+             ? std::optional(target)
+             : std::nullopt;
+}
+
 void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box2d>& bounds,
                             MaskType maskType, ColorInterpolation colorInterpolation) {
   if (colorInterpolation == ColorInterpolation::LinearRGB) {
@@ -4593,6 +4822,57 @@ void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box
 }
 
 }  // namespace
+
+int RendererDriver::renderRangeMask(RenderingInstanceView& view, Registry& registry,
+                                    const components::RenderingInstanceComponent& instance,
+                                    const components::ComputedStyleComponent& style, Entity entity,
+                                    Entity first, Entity last) {
+  // An opted-in complete damage owner is first on a newly cleared target. Its normal
+  // blending sees the same transparent backdrop as the mask content texture.
+  if (allowDamageMaskElisionInRange_ && entity == first && !instance.clipRect &&
+      HasNeutralLeafCompositing(style) && !instance.hasClipPath() && !instance.resolvedFilter &&
+      instance.subtreeLastEntity == last && skipOpaqueDamageMask(view, registry, instance)) {
+    return 0;
+  }
+  return renderMask(view, registry, instance, *instance.mask);
+}
+
+bool RendererDriver::skipOpaqueDamageMask(RenderingInstanceView& view, Registry& registry,
+                                          const components::RenderingInstanceComponent& instance) {
+  const auto& mask = *instance.mask;
+  if (!mask.subtreeInfo || view.done() ||
+      view.currentEntity() != mask.subtreeInfo->firstRenderedEntity ||
+      externalUseStyleWork_->rejected()) {
+    return false;
+  }
+  const auto* maskStyle = UserSpaceMaskForProof(mask);
+  if (!maskStyle) {
+    return false;
+  }
+  const Box2d shapeBounds = maskObjectBounds(registry, instance, *maskStyle);
+  if (shapeBounds.isEmpty()) {
+    return false;
+  }
+  const auto region = MaskRegionBounds(instance.dataHandle(registry), *maskStyle, shapeBounds);
+  const Transform2d surfaceFromHost =
+      instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
+  const auto target = region
+                          ? DamageMaskInteriorViewport(Vector2d(renderingSize_.x, renderingSize_.y),
+                                                       *region, surfaceFromHost)
+                          : std::nullopt;
+  if (!target) {
+    return false;
+  }
+  const auto saved = view.save();
+  const MaskType type = MaskPaintOptions(mask.reference.handle).first;
+  const bool opaque =
+      MaskSubtreeIsOpaque(view, registry, *mask.subtreeInfo, type, surfaceFromHost, *target);
+  view.restore(saved);
+  if (opaque) {
+    skipDrawnContent(view, registry, *mask.subtreeInfo);
+  }
+  return opaque;
+}
 
 void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& registry,
                                         const components::RenderingInstanceComponent& instance,

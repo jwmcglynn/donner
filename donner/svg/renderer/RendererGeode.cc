@@ -2244,6 +2244,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::uint64_t filterReducedRasters = 0;
   /// Filter graphs this frame ran at full resolution in more than one tile.
   std::uint64_t filterTiledGraphs = 0;
+  /// Simple path clips proven disjoint from their active target this frame.
+  std::uint64_t simpleClipCulls = 0;
   /// Device pixels per raster pixel of this frame's coarsest reduced filter raster, or 1.
   std::uint32_t filterRasterReduction = 1;
   bool failFilterFrameRestoreForTesting = false;
@@ -3836,7 +3838,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// pushed. It is computed from the fold of the entry below and the entry itself, so a push folds
   /// one entry and a pop folds nothing: the entry below already holds its own fold.
   struct ClipFold {
-    /// An entry's coverage could not be produced, or the stacked polygons do not overlap.
+    /// An entry is known empty, its coverage could not be produced, or polygons do not overlap.
     bool drawsNothing = false;
     /// Intersection of every valid `pixelRect`; none when no entry has one.
     std::optional<Box2d> scissor;
@@ -3867,6 +3869,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     bool hasPolygon = false;
     /// From ResolvedClip::boundsFallbackWhenStacked.
     bool boundsFallbackWhenStacked = false;
+    /// The clip's bounded geometry is proven disjoint from the active target.
+    bool knownEmpty = false;
     /// The clip's coverage could not be produced, so nothing under it draws.
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
@@ -4327,6 +4331,115 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     encoder->clearClipMask();
     encoder->setTransform(savedDeviceFromLocal);
+  }
+
+  struct SimpleClipHull {
+    Box2d bounds;
+    double margin = 0.0;
+  };
+
+  static bool fitsGpuFloat(double value) {
+    return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+  }
+
+  static bool fitsGpuFloat(const Vector2d& value) {
+    return fitsGpuFloat(value.x) && fitsGpuFloat(value.y);
+  }
+
+  static bool fitsGpuFloat(const Transform2d& value) {
+    return std::all_of(std::begin(value.data), std::end(value.data),
+                       [](double coefficient) { return fitsGpuFloat(coefficient); });
+  }
+
+  static bool isLinearClipPath(const Path& path) {
+    return std::all_of(
+        path.commands().begin(), path.commands().end(), [](const Path::Command& command) {
+          return command.verb == Path::Verb::MoveTo || command.verb == Path::Verb::LineTo ||
+                 command.verb == Path::Verb::ClosePath;
+        });
+  }
+
+  /// Whether \p shape is a bounded-work, non-nested linear clip candidate.
+  static bool isSimpleClipCullCandidate(const ClipPathShape& shape) {
+    constexpr std::size_t kMaximumCommands = 64;
+    constexpr std::size_t kMaximumPoints = 3 * kMaximumCommands;
+    return shape.layer == 0 && shape.groupPathCount == 0 && !shape.path.commands().empty() &&
+           shape.path.commands().size() <= kMaximumCommands && isLinearClipPath(shape.path) &&
+           !shape.path.points().empty() && shape.path.points().size() <= kMaximumPoints;
+  }
+
+  /// Conservative device-space control-point hull and raster arithmetic margin for \p shape.
+  static std::optional<SimpleClipHull> simpleClipHull(const ClipPathShape& shape,
+                                                      const Transform2d& deviceFromShape) {
+    constexpr double kAntialiasMargin = 2.0;
+    constexpr double kFloatOperationsMargin = 32.0;
+    const std::span<const Vector2d> points = shape.path.points();
+    if (!fitsGpuFloat(points.front())) {
+      return std::nullopt;
+    }
+    const Vector2d firstDevicePoint = deviceFromShape.transformPosition(points.front());
+    if (!fitsGpuFloat(firstDevicePoint)) {
+      return std::nullopt;
+    }
+
+    Box2d deviceHull = Box2d::CreateEmpty(firstDevicePoint);
+    double maximumLocalX = 0.0;
+    double maximumLocalY = 0.0;
+    for (const Vector2d& point : points) {
+      if (!fitsGpuFloat(point)) {
+        return std::nullopt;
+      }
+      maximumLocalX = std::max(maximumLocalX, std::abs(point.x));
+      maximumLocalY = std::max(maximumLocalY, std::abs(point.y));
+      const Vector2d devicePoint = deviceFromShape.transformPosition(point);
+      if (!fitsGpuFloat(devicePoint)) {
+        return std::nullopt;
+      }
+      deviceHull.addPoint(devicePoint);
+    }
+    const double maximumDeviceX = std::abs(deviceFromShape.data[0]) * maximumLocalX +
+                                  std::abs(deviceFromShape.data[2]) * maximumLocalY +
+                                  std::abs(deviceFromShape.data[4]);
+    const double maximumDeviceY = std::abs(deviceFromShape.data[1]) * maximumLocalX +
+                                  std::abs(deviceFromShape.data[3]) * maximumLocalY +
+                                  std::abs(deviceFromShape.data[5]);
+    if (!fitsGpuFloat(maximumDeviceX) || !fitsGpuFloat(maximumDeviceY)) {
+      return std::nullopt;
+    }
+    const double arithmeticMargin = kFloatOperationsMargin * std::numeric_limits<float>::epsilon() *
+                                    std::max(maximumDeviceX, maximumDeviceY);
+    if (!std::isfinite(arithmeticMargin)) {
+      return std::nullopt;
+    }
+    return SimpleClipHull{deviceHull, kAntialiasMargin + arithmeticMargin};
+  }
+
+  static bool missesTarget(const SimpleClipHull& hull, const gpu::Extent2d& extent) {
+    return hull.bounds.bottomRight.x < -hull.margin || hull.bounds.bottomRight.y < -hull.margin ||
+           hull.bounds.topLeft.x > static_cast<double>(extent.width) + hull.margin ||
+           hull.bounds.topLeft.y > static_cast<double>(extent.height) + hull.margin;
+  }
+
+  /// Whether a bounded, non-nested linear path clip is conservatively outside the active target.
+  ///
+  /// Path bounds are linear in the path size, so this only inspects small paths. The margin covers
+  /// antialiasing plus the float conversion and arithmetic used by the GPU path pipeline. Any
+  /// non-finite or unbounded input keeps the exact mask path.
+  bool simpleClipMissesTarget(const ResolvedClip& clip) const {
+    if (clip.clipPaths.size() != 1) {
+      return false;
+    }
+    const ClipPathShape& shape = clip.clipPaths.front();
+    if (!isSimpleClipCullCandidate(shape)) {
+      return false;
+    }
+    const Transform2d deviceFromShape =
+        clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocalTransform;
+    if (!fitsGpuFloat(deviceFromShape)) {
+      return false;
+    }
+    const std::optional<SimpleClipHull> hull = simpleClipHull(shape, deviceFromShape);
+    return hull && missesTarget(*hull, targetExtent());
   }
 
   bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
@@ -4997,6 +5110,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       fold.maskView = entry.maskResolveViewHandle;
     }
     if (fold.drawsNothing) {
+      return fold;
+    }
+    if (entry.knownEmpty) {
+      fold.drawsNothing = true;
       return fold;
     }
     if (entry.allocationRejected) {
@@ -8761,6 +8878,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       device->drainDeferredDestroys();
     }
     counters.reset();
+    simpleClipCulls = 0;
     viewport = nextViewport;
     const Vector2i pixelSize = CheckedViewportPixels(nextViewport).value_or(Vector2i::Zero());
     pixelWidth = pixelSize.x;
@@ -9466,6 +9584,10 @@ size_t RendererGeode::clipMaskViewCountForTesting() const {
   return impl_->clipMaskViews.size();
 }
 
+std::uint64_t RendererGeode::simpleClipCullCountForTesting() const {
+  return impl_->simpleClipCulls;
+}
+
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   if (!impl_->device) {
     return 0;
@@ -9675,7 +9797,12 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
   if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
       impl_->pixelHeight > 0) {
-    impl_->buildClipMask(clip, entry);
+    if (impl_->simpleClipMissesTarget(clip)) {
+      entry.knownEmpty = true;
+      ++impl_->simpleClipCulls;
+    } else {
+      impl_->buildClipMask(clip, entry);
+    }
   }
 
   impl_->pushClipEntry(std::move(entry));
