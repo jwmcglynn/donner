@@ -718,6 +718,9 @@ public:
   /// Number of clip-mask texture views this renderer keeps between frames.
   [[nodiscard]] size_t clipMaskViewCountForTesting() const;
 
+  /// Simple path clips proven disjoint from their active target in the current frame.
+  [[nodiscard]] std::uint64_t simpleClipCullCountForTesting() const;
+
   /**
    * Captures the current resolved render target as a directly sampleable
    * GPU runtime texture.
